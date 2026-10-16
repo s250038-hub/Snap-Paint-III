@@ -137,11 +137,19 @@ body::before{
 /* ---------- gallery ---------- */
 #screen-gallery{background:var(--bg)}
 #gallery-grid{flex:1;overflow-y:auto;padding:15px;display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:15px;align-content:start}
-.gallery-item{background:var(--panel);border:1px solid var(--line);border-radius:14px;overflow:hidden;box-shadow:0 6px 16px rgba(0,0,0,.35);cursor:pointer;transition:transform .15s ease,box-shadow .15s ease}
+.gallery-item{background:var(--panel);border:1px solid var(--line);border-radius:14px;overflow:hidden;box-shadow:0 6px 16px rgba(0,0,0,.35);cursor:pointer;transition:transform .15s ease,box-shadow .15s ease;position:relative}
 .gallery-item:active{transform:scale(.97)}
 .gallery-item img{width:100%;aspect-ratio:1;object-fit:cover;display:block;background:#0B0F15}
 .gallery-meta{padding:7px 9px;font-size:.74rem;color:var(--muted);display:flex;justify-content:space-between;gap:6px}
 .gallery-meta b{color:var(--text);font-weight:600}
+.gallery-delete{
+  position:absolute;top:8px;right:8px;width:28px;height:28px;
+  background:rgba(255,107,94,.9);color:#fff;border:none;border-radius:50%;
+  font-size:1rem;font-weight:bold;cursor:pointer;display:flex;align-items:center;justify-content:center;
+  box-shadow:0 2px 8px rgba(0,0,0,.4);transition:transform .1s,background .15s;
+  z-index:2;
+}
+.gallery-delete:active{transform:scale(1.2);background:var(--bad)}
 .empty-msg{grid-column:1/-1;text-align:center;color:var(--muted);margin-top:60px;line-height:1.8}
 
 /* ---------- overlays ---------- */
@@ -247,7 +255,6 @@ body::before{
   <div class="hud">
     <button class="icon-btn" onclick="showScreen('screen-menu')">‹ 返回</button>
     <span class="title-mini" style="flex:1;text-align:center;color:var(--accent)">🏆 我的作品</span>
-    <button class="icon-btn" onclick="clearGallery()">🗑️</button>
   </div>
   <div id="gallery-grid"></div>
 </div>
@@ -284,12 +291,12 @@ body::before{
 /* ================================================================
    一拍即玩 SnapPaint — full-resolution paint-by-number engine
    ================================================================ */
-const MAX_SRC_DIM = 1920;          // longest edge cap -> 1920x1080 = 2,073,600 blocks
+const MAX_SRC_DIM = 1920;
 const NUM_FONT = 'ui-monospace,"SF Mono",Menlo,Consolas,monospace';
 
-let srcImg = null;                 // original photo
-let chosenPct = 100;               // resolution chip
-let P = null;                      // active puzzle data
+let srcImg = null;
+let chosenPct = 100;
+let P = null;
 const view = { scale:1, tx:0, ty:0 };
 let dirty = true, flashes = [];
 
@@ -359,7 +366,7 @@ function enterResScreen(){
 function startGame(){
   if(!srcImg){ showToast('請先拍攝或選擇一張照片！'); return; }
   showOverlay('overlay-loading');
-  setTimeout(()=>{                       // let overlay paint first
+  setTimeout(()=>{
     try{ buildPuzzle(chosenPct/100); }
     catch(err){ hideOverlay('overlay-loading'); showToast('生成失敗：圖片太大或記憶體不足'); console.error(err); return; }
     hideOverlay('overlay-loading');
@@ -380,7 +387,6 @@ function buildPuzzle(f){
   oc.drawImage(srcImg,0,0,cols,rows);
   const data=oc.getImageData(0,0,cols,rows).data;
 
-  // pass 1 — quantize to 12-bit keys & count
   const keys=new Uint16Array(n);
   const counts=new Uint32Array(4096);
   for(let i=0,p=0;i<n;i++,p+=4){
@@ -389,7 +395,6 @@ function buildPuzzle(f){
     keys[i]=k; counts[k]++;
   }
 
-  // pass 2 — palette (numbers in stable ascending order)
   const keyToIdx=new Int16Array(4096).fill(-1);
   const palette=[];
   for(let k=0;k<4096;k++){
@@ -406,7 +411,6 @@ function buildPuzzle(f){
     });
   }
 
-  // pass 3 — cell map + grayscale base
   const indexMap=new Uint16Array(n);
   const grayImg=new ImageData(cols,rows);
   const gd=grayImg.data;
@@ -523,7 +527,6 @@ function render(){
   ctx.setTransform(dpr,0,0,dpr,0,0);
   ctx.fillStyle='#0B0F15'; ctx.fillRect(0,0,m.W,m.H);
 
-  // board shadow + pixel layer
   ctx.save();
   ctx.shadowColor='rgba(0,0,0,.6)'; ctx.shadowBlur=26;
   ctx.fillStyle='#222'; ctx.fillRect(m.dx,m.dy,m.cw,m.ch);
@@ -534,7 +537,6 @@ function render(){
   const c0=clamp(Math.floor(-m.dx/m.cell),0,P.cols), c1=clamp(Math.ceil((m.W-m.dx)/m.cell),0,P.cols);
   const r0=clamp(Math.floor(-m.dy/m.cell),0,P.rows), r1=clamp(Math.ceil((m.H-m.dy)/m.cell),0,P.rows);
 
-  // grid lines
   if(m.cell>=4){
     ctx.strokeStyle=m.cell>=9?'rgba(8,12,18,.30)':'rgba(8,12,18,.18)';
     ctx.lineWidth=1; ctx.beginPath();
@@ -545,7 +547,6 @@ function render(){
   ctx.strokeStyle='rgba(255,255,255,.14)'; ctx.lineWidth=1;
   ctx.strokeRect(m.dx+.5,m.dy+.5,m.cw-1,m.ch-1);
 
-  // numbers (only where legible)
   if(m.cell>=12){
     ctx.textAlign='center'; ctx.textBaseline='middle';
     const size=[0, m.cell*.58, m.cell*.58, m.cell*.5, m.cell*.375];
@@ -568,7 +569,6 @@ function render(){
     }
   }
 
-  // wrong-tap flashes
   const now=performance.now();
   flashes=flashes.filter(f=>now-f.t<320);
   for(const f of flashes){
@@ -605,7 +605,6 @@ function paintAt(e){
   floodFill(cell.c,cell.r,P.indexMap[i]);
 }
 
-/* scanline flood fill of one connected same-number region */
 function floodFill(c0,r0,pi){
   const {cols,rows,indexMap,filled,palette,workImg}=P;
   const e=palette[pi], d=workImg.data;
@@ -774,7 +773,7 @@ function makeResultURL(maxDim,quality){
   out.width=Math.max(1,Math.round(P.cols*f));
   out.height=Math.max(1,Math.round(P.rows*f));
   const c=out.getContext('2d');
-  c.imageSmoothingEnabled=f<1;                 // crisp pixel-art look
+  c.imageSmoothingEnabled=f<1;
   c.drawImage(P.workCanvas,0,0,out.width,out.height);
   return out.toDataURL('image/jpeg',quality);
 }
@@ -815,6 +814,7 @@ function saveArtwork(){
   else showToast('儲存空間不足，無法儲存');
 }
 
+/* ---- Gallery with individual delete ---- */
 function showGallery(){
   showScreen('screen-gallery');
   const grid=$('gallery-grid'); grid.innerHTML='';
@@ -826,20 +826,25 @@ function showGallery(){
   g.forEach(item=>{
     const div=document.createElement('div');
     div.className='gallery-item';
-    div.innerHTML=`<img src="${item.image}" alt="作品">
+    div.innerHTML=`
+      <img src="${item.image}" alt="作品">
+      <button class="gallery-delete" onclick="event.stopPropagation();deleteGalleryItem(${item.id})">✕</button>
       <div class="gallery-meta"><b>${item.date}</b><span>${item.w}×${item.h}</span></div>`;
     div.addEventListener('click',()=>openViewer(item));
     grid.appendChild(div);
   });
 }
-function clearGallery(){
-  if(confirm('確定要清空所有作品嗎？')){
-    localStorage.removeItem('snapPaintGallery');
-    showGallery(); showToast('已清空');
-  }
+
+function deleteGalleryItem(id){
+  if(!confirm('確定要刪除這幅作品嗎？')) return;
+  let g=JSON.parse(localStorage.getItem('snapPaintGallery')||'[]');
+  g=g.filter(x=>x.id!==id);
+  localStorage.setItem('snapPaintGallery',JSON.stringify(g));
+  showGallery();
+  showToast('🗑️ 已刪除');
 }
 
-/* ---- full-screen artwork viewer (pinch / drag / scroll zoom) ---- */
+/* ---- full-screen artwork viewer ---- */
 let viewerItem=null;
 const V={s:1,tx:0,ty:0};
 function openViewer(item){
@@ -919,11 +924,8 @@ function applyV(){
 function downloadViewerItem(){ if(viewerItem) downloadURL(viewerItem.image,`SnapPaint_${viewerItem.id}.jpg`); }
 function deleteViewerItem(){
   if(!viewerItem||!confirm('刪除這幅作品？')) return;
-  let g=JSON.parse(localStorage.getItem('snapPaintGallery')||'[]');
-  g=g.filter(x=>x.id!==viewerItem.id);
-  localStorage.setItem('snapPaintGallery',JSON.stringify(g));
+  deleteGalleryItem(viewerItem.id);
   hideOverlay('overlay-viewer');
-  showGallery(); showToast('已刪除');
 }
 
 /* ---------------- boot ---------------- */
