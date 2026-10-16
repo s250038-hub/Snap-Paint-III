@@ -1,0 +1,935 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>一拍即玩 SnapPaint</title>
+<style>
+:root{
+  --bg:#0E131B; --panel:#161D27; --panel2:#1C2532; --line:rgba(255,255,255,.08);
+  --text:#E9EEF5; --muted:#8B98AA; --accent:#5EA0F2; --accent-deep:#3E7FD6;
+  --good:#35D07F; --warn:#FFC53D; --bad:#FF6B5E;
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,"Courier New",monospace;
+  --disp:"Avenir Next","Futura","Trebuchet MS",-apple-system,"PingFang TC","Microsoft JhengHei",sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0;touch-action:manipulation;-webkit-tap-highlight-color:transparent}
+html,body{height:100%}
+body{
+  font-family:-apple-system,BlinkMacSystemFont,"PingFang TC","Microsoft JhengHei","Segoe UI",Roboto,sans-serif;
+  background:var(--bg);color:var(--text);overflow:hidden;width:100vw;
+  height:100vh;height:100dvh;display:flex;flex-direction:column;
+}
+body::before{
+  content:"";position:fixed;inset:0;pointer-events:none;z-index:0;
+  background:
+    radial-gradient(600px 420px at 12% -5%,rgba(94,160,242,.14),transparent 60%),
+    radial-gradient(520px 400px at 105% 108%,rgba(53,208,127,.10),transparent 60%),
+    linear-gradient(rgba(255,255,255,.025) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(255,255,255,.025) 1px,transparent 1px);
+  background-size:auto,auto,26px 26px,26px 26px;
+}
+.screen{display:none;flex-direction:column;height:100%;width:100%;position:absolute;top:0;left:0;z-index:1}
+.screen.active{display:flex;animation:screenIn .28s ease}
+@keyframes screenIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+
+/* ---------- buttons ---------- */
+.btn{
+  padding:14px 26px;font-size:1.05rem;font-weight:700;border:none;border-radius:14px;
+  background:linear-gradient(160deg,var(--accent),var(--accent-deep));color:#fff;
+  margin:7px;cursor:pointer;width:88%;max-width:340px;letter-spacing:.5px;
+  box-shadow:0 6px 18px rgba(62,127,214,.35),inset 0 1px 0 rgba(255,255,255,.25);
+  transition:transform .12s ease,box-shadow .12s ease;
+}
+.btn:active{transform:scale(.97);box-shadow:0 3px 10px rgba(62,127,214,.3)}
+.btn-ghost{background:var(--panel2);color:var(--text);border:1px solid var(--line);box-shadow:none}
+.btn-good{background:linear-gradient(160deg,#3ED489,#22A866);box-shadow:0 6px 18px rgba(34,168,102,.35)}
+.btn-mini{width:auto;padding:9px 16px;font-size:.92rem;margin:0}
+
+/* ---------- menu ---------- */
+#screen-menu{justify-content:center;align-items:center;text-align:center;padding:24px;background:transparent}
+.logo-strip{display:flex;gap:8px;margin-bottom:18px}
+.logo-strip i{width:18px;height:18px;border-radius:4px;animation:bob 1.6s ease-in-out infinite}
+.logo-strip i:nth-child(1){background:#FF6B5E;animation-delay:0s}
+.logo-strip i:nth-child(2){background:#FFC53D;animation-delay:.12s}
+.logo-strip i:nth-child(3){background:#35D07F;animation-delay:.24s}
+.logo-strip i:nth-child(4){background:#5EA0F2;animation-delay:.36s}
+.logo-strip i:nth-child(5){background:#B07CF7;animation-delay:.48s}
+@keyframes bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-8px)}}
+#screen-menu h1{font-family:var(--disp);font-size:2.6rem;font-weight:800;letter-spacing:1px;line-height:1.15}
+#screen-menu h1 small{display:block;font-size:1.05rem;font-weight:600;color:var(--accent);letter-spacing:4px;margin-top:6px}
+#screen-menu .tag{margin:16px 0 30px;color:var(--muted);max-width:320px;line-height:1.7;font-size:.95rem}
+
+/* ---------- resolution screen ---------- */
+#screen-res{justify-content:center;align-items:center;padding:22px;text-align:center}
+#screen-res h2{font-family:var(--disp);font-size:1.5rem;margin-bottom:16px}
+#res-preview{width:150px;height:150px;object-fit:cover;border-radius:18px;border:1px solid var(--line);box-shadow:0 10px 26px rgba(0,0,0,.45);margin-bottom:16px}
+#res-stats{font-family:var(--mono);font-size:1rem;color:var(--accent);background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 18px;margin-bottom:8px}
+#res-note{color:var(--muted);font-size:.82rem;min-height:1.3em;margin-bottom:14px}
+.chips{display:flex;gap:8px;margin-bottom:18px}
+.chip{padding:9px 14px;border-radius:999px;border:1px solid var(--line);background:var(--panel);color:var(--muted);font-size:.88rem;font-weight:700;cursor:pointer;transition:all .15s}
+.chip.on{background:var(--accent);border-color:var(--accent);color:#fff;box-shadow:0 4px 12px rgba(94,160,242,.4)}
+.res-hint{color:var(--muted);font-size:.8rem;line-height:1.7;max-width:340px;margin-top:16px}
+
+/* ---------- game ---------- */
+#screen-game{background:#0B0F15}
+.hud{
+  padding:9px 12px;background:rgba(22,29,39,.96);display:flex;align-items:center;gap:10px;
+  border-bottom:1px solid var(--line);z-index:10;flex-shrink:0;backdrop-filter:blur(6px);
+}
+.hud .icon-btn{background:var(--panel2);border:1px solid var(--line);color:var(--text);border-radius:10px;padding:7px 11px;font-size:1rem;cursor:pointer;transition:background .15s,transform .1s;flex-shrink:0}
+.hud .icon-btn:active{transform:scale(.94);background:#26324333}
+.hud .icon-btn.hold{background:var(--accent);color:#fff}
+.hud-center{flex:1;display:flex;align-items:center;justify-content:center;gap:12px;min-width:0}
+.progress-container{position:relative;width:44px;height:44px;flex-shrink:0}
+.progress-ring{transform:rotate(-90deg)}
+.progress-ring__circle{transition:stroke-dashoffset .35s;transform-origin:50% 50%}
+.progress-text{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-family:var(--mono);font-size:.62rem;font-weight:700;color:var(--accent)}
+#timer{font-family:var(--mono);font-size:.95rem;color:var(--muted);letter-spacing:1px}
+.title-mini{font-family:var(--disp);font-weight:800;font-size:.92rem;color:var(--muted);letter-spacing:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+#canvas-container{flex:1;min-height:0;position:relative;overflow:hidden;background:#0B0F15;width:100%;touch-action:none;cursor:crosshair}
+#main-canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
+#peek-img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:rgba(8,11,16,.94);display:none;z-index:5;pointer-events:none}
+
+#bottom-panel{background:var(--panel);border-top:1px solid var(--line);padding:8px 10px 10px;display:flex;flex-direction:column;gap:9px;z-index:10;flex-shrink:0}
+#palette-container{display:flex;gap:14px;overflow-x:auto;padding:6px 4px 2px;scrollbar-width:thin;scrollbar-color:#31405A transparent}
+#palette-container::-webkit-scrollbar{height:5px}
+#palette-container::-webkit-scrollbar-thumb{background:#31405A;border-radius:3px}
+.pal-item{display:flex;flex-direction:column;align-items:center;gap:5px;flex-shrink:0;cursor:pointer}
+.pal-dot{
+  width:48px;height:48px;border-radius:50%;display:flex;justify-content:center;align-items:center;
+  border:3px solid rgba(255,255,255,.14);box-shadow:0 3px 8px rgba(0,0,0,.4);
+  transition:transform .15s ease,border-color .15s ease,box-shadow .15s ease;
+}
+.pal-item.selected .pal-dot{border-color:var(--warn);transform:scale(1.12);box-shadow:0 0 0 3px rgba(255,197,61,.28),0 4px 12px rgba(0,0,0,.5)}
+.pal-num{font-family:var(--mono);font-weight:700;font-size:1rem;pointer-events:none}
+.pal-bar{width:48px;height:5px;background:rgba(255,255,255,.1);border-radius:3px;overflow:hidden}
+.pal-bar i{display:block;height:100%;width:0%;border-radius:3px;transition:width .3s ease}
+#toolbar{display:flex;gap:9px;align-items:center}
+#toolbar .tbtn{flex:1;padding:10px;border:1px solid var(--line);background:var(--panel2);color:var(--text);border-radius:10px;font-size:.95rem;font-weight:700;cursor:pointer}
+#toolbar .tbtn:active{transform:scale(.97)}
+#toolbar .tbtn.primary{background:var(--accent);border-color:var(--accent);color:#fff;flex:0.7}
+#num-input{flex:1.8;padding:10px;border:1px solid var(--line);border-radius:10px;background:#0F1520;color:var(--text);text-align:center;font-family:var(--mono);font-size:1.2rem;font-weight:700;letter-spacing:3px;outline:none}
+#num-input:focus{border-color:var(--accent)}
+
+/* ---------- gallery ---------- */
+#screen-gallery{background:var(--bg)}
+#gallery-grid{flex:1;overflow-y:auto;padding:15px;display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:15px;align-content:start}
+.gallery-item{background:var(--panel);border:1px solid var(--line);border-radius:14px;overflow:hidden;box-shadow:0 6px 16px rgba(0,0,0,.35);cursor:pointer;transition:transform .15s ease,box-shadow .15s ease}
+.gallery-item:active{transform:scale(.97)}
+.gallery-item img{width:100%;aspect-ratio:1;object-fit:cover;display:block;background:#0B0F15}
+.gallery-meta{padding:7px 9px;font-size:.74rem;color:var(--muted);display:flex;justify-content:space-between;gap:6px}
+.gallery-meta b{color:var(--text);font-weight:600}
+.empty-msg{grid-column:1/-1;text-align:center;color:var(--muted);margin-top:60px;line-height:1.8}
+
+/* ---------- overlays ---------- */
+.overlay{
+  position:fixed;inset:0;background:rgba(7,10,15,.88);backdrop-filter:blur(6px);
+  color:#fff;display:none;justify-content:center;align-items:center;flex-direction:column;
+  z-index:100;padding:20px;text-align:center;
+}
+.overlay.active{display:flex;animation:screenIn .25s ease}
+.dots{display:flex;gap:10px;margin-bottom:18px}
+.dots i{width:14px;height:14px;border-radius:4px;animation:bob 1.2s ease-in-out infinite}
+.dots i:nth-child(1){background:var(--bad)}
+.dots i:nth-child(2){background:var(--warn);animation-delay:.15s}
+.dots i:nth-child(3){background:var(--good);animation-delay:.3s}
+.dots i:nth-child(4){background:var(--accent);animation-delay:.45s}
+#overlay-complete h2{font-family:var(--disp);font-size:2.4rem;margin-bottom:12px;animation:bob 2s ease-in-out infinite}
+#complete-preview{max-width:min(78vw,340px);max-height:42vh;border-radius:12px;border:1px solid var(--line);box-shadow:0 16px 44px rgba(0,0,0,.6);image-rendering:pixelated;margin-bottom:12px}
+.stat-row{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-bottom:18px}
+.stat-chip{font-family:var(--mono);font-size:.8rem;background:var(--panel2);border:1px solid var(--line);border-radius:999px;padding:6px 13px;color:var(--muted)}
+.stat-chip b{color:var(--accent)}
+
+/* viewer */
+#overlay-viewer{padding:0;justify-content:flex-start}
+.viewer-bar{width:100%;display:flex;align-items:center;gap:8px;padding:10px 12px;background:var(--panel);border-bottom:1px solid var(--line);z-index:2}
+.viewer-bar .vmeta{flex:1;text-align:center;font-size:.82rem;color:var(--muted);line-height:1.4;min-width:0}
+.viewer-bar .vmeta b{display:block;color:var(--text);font-family:var(--mono);font-size:.86rem}
+#viewer-stage{flex:1;width:100%;position:relative;overflow:hidden;touch-action:none;background:#07090D;display:flex;justify-content:center;align-items:center}
+#viewer-img{max-width:100%;max-height:100%;display:block;box-shadow:0 12px 40px rgba(0,0,0,.6);will-change:transform;user-select:none;-webkit-user-drag:none}
+
+#toast{
+  position:fixed;bottom:21%;left:50%;transform:translateX(-50%) translateY(8px);
+  background:rgba(12,16,24,.92);border:1px solid var(--line);color:#fff;padding:10px 20px;
+  border-radius:999px;font-size:.92rem;z-index:300;display:none;pointer-events:none;
+  box-shadow:0 8px 22px rgba(0,0,0,.5);white-space:nowrap;
+}
+#toast.show{display:block;animation:toastIn .25s ease forwards}
+@keyframes toastIn{to{transform:translateX(-50%) translateY(0);opacity:1}}
+</style>
+</head>
+<body>
+
+<!-- ============ MENU ============ -->
+<div id="screen-menu" class="screen active">
+  <div class="logo-strip"><i></i><i></i><i></i><i></i><i></i></div>
+  <h1>一拍即玩<small>SNAPPAINT</small></h1>
+  <p class="tag">📸 拍下一張照片，它會被切成上千個編號方格。<br>選色、填滿、逐步重現你的原作！</p>
+  <button class="btn" onclick="triggerUpload()">📷 即影即玩 / 🖼️ 從相簿選擇</button>
+  <button class="btn btn-ghost" onclick="showGallery()">🏆 我的作品</button>
+  <input type="file" id="file-input" accept="image/*" style="display:none" onchange="handleFileSelect(event)">
+</div>
+
+<!-- ============ RESOLUTION ============ -->
+<div id="screen-res" class="screen">
+  <h2>選擇解析度</h2>
+  <img id="res-preview" alt="preview">
+  <div id="res-stats">— × —</div>
+  <div id="res-note"></div>
+  <div class="chips">
+    <button class="chip on" data-pct="100" onclick="setPct(this)">100% 完整</button>
+    <button class="chip" data-pct="50" onclick="setPct(this)">50%</button>
+    <button class="chip" data-pct="25" onclick="setPct(this)">25%</button>
+  </div>
+  <button class="btn" onclick="startGame()">🎨 開始挑戰</button>
+  <button class="btn btn-ghost" onclick="showScreen('screen-menu')">返回</button>
+  <p class="res-hint">💡 單指 / 左鍵＝填色（同色區域會整片填滿）<br>雙指 / 右鍵拖曳＝平移・縮放　雙擊＝回到全覽　💡提示可幫你選色</p>
+</div>
+
+<!-- ============ GAME ============ -->
+<div id="screen-game" class="screen">
+  <div class="hud">
+    <button class="icon-btn" onclick="goHome()">‹ 返回</button>
+    <div class="hud-center">
+      <div class="progress-container">
+        <svg class="progress-ring" width="44" height="44">
+          <circle stroke="rgba(255,255,255,.12)" stroke-width="4" fill="transparent" r="18" cx="22" cy="22"/>
+          <circle id="progress-circle" class="progress-ring__circle" stroke="var(--accent)" stroke-width="4" fill="transparent" r="18" cx="22" cy="22" stroke-linecap="round" stroke-dasharray="113.1" stroke-dashoffset="113.1"/>
+        </svg>
+        <span id="progress-text" class="progress-text">0%</span>
+      </div>
+      <span id="timer">0:00</span>
+    </div>
+    <button class="icon-btn" id="peek-btn" title="按住查看原圖">👁</button>
+    <button class="icon-btn" onclick="useHint()">💡</button>
+  </div>
+
+  <div id="canvas-container">
+    <canvas id="main-canvas"></canvas>
+    <img id="peek-img" alt="原圖">
+  </div>
+
+  <div id="bottom-panel">
+    <div id="palette-container"></div>
+    <div id="toolbar">
+      <button class="tbtn" onclick="resetGrid()">↺ 重置</button>
+      <input type="text" id="num-input" placeholder="編號" maxlength="4" inputmode="numeric" autocomplete="off">
+      <button class="tbtn primary" onclick="selectNumFromInput()">選擇</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ GALLERY ============ -->
+<div id="screen-gallery" class="screen">
+  <div class="hud">
+    <button class="icon-btn" onclick="showScreen('screen-menu')">‹ 返回</button>
+    <span class="title-mini" style="flex:1;text-align:center;color:var(--accent)">🏆 我的作品</span>
+    <button class="icon-btn" onclick="clearGallery()">🗑️</button>
+  </div>
+  <div id="gallery-grid"></div>
+</div>
+
+<!-- ============ OVERLAYS ============ -->
+<div id="overlay-loading" class="overlay">
+  <div class="dots"><i></i><i></i><i></i><i></i></div>
+  <p style="color:var(--muted)">正在把照片切成方格…</p>
+</div>
+
+<div id="overlay-complete" class="overlay">
+  <h2>🎉 完成！</h2>
+  <img id="complete-preview" alt="完成作品">
+  <div class="stat-row" id="complete-stats"></div>
+  <button class="btn btn-good" onclick="saveArtwork()">💾 儲存到作品庫</button>
+  <button class="btn" onclick="downloadCurrent()">⬇️ 下載圖片</button>
+  <button class="btn btn-ghost" onclick="replay()">🔁 再玩一次</button>
+  <button class="btn btn-ghost" onclick="goHome()">🏠 主選單</button>
+</div>
+
+<div id="overlay-viewer" class="overlay">
+  <div class="viewer-bar">
+    <button class="icon-btn" onclick="hideOverlay('overlay-viewer')">✕</button>
+    <div class="vmeta"><b id="viewer-title"></b><span id="viewer-sub"></span></div>
+    <button class="icon-btn" onclick="downloadViewerItem()">⬇️</button>
+    <button class="icon-btn" onclick="deleteViewerItem()">🗑️</button>
+  </div>
+  <div id="viewer-stage"><img id="viewer-img" alt="作品"></div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+/* ================================================================
+   一拍即玩 SnapPaint — full-resolution paint-by-number engine
+   ================================================================ */
+const MAX_SRC_DIM = 1920;          // longest edge cap -> 1920x1080 = 2,073,600 blocks
+const NUM_FONT = 'ui-monospace,"SF Mono",Menlo,Consolas,monospace';
+
+let srcImg = null;                 // original photo
+let chosenPct = 100;               // resolution chip
+let P = null;                      // active puzzle data
+const view = { scale:1, tx:0, ty:0 };
+let dirty = true, flashes = [];
+
+const $ = id => document.getElementById(id);
+const clamp = (v,a,b)=>Math.min(Math.max(v,a),b);
+const fmt = n => n.toLocaleString('en-US');
+
+/* ---------------- screens / overlays / toast ---------------- */
+function showScreen(id){
+  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
+  $(id).classList.add('active');
+  if(id!=='screen-game') stopTimer();
+}
+function showOverlay(id){ $(id).classList.add('active'); }
+function hideOverlay(id){ $(id).classList.remove('active'); }
+let toastTimer=null;
+function showToast(msg){
+  const t=$('toast'); t.textContent=msg;
+  t.classList.remove('show'); void t.offsetWidth; t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer=setTimeout(()=>t.classList.remove('show'),2200);
+}
+
+/* ---------------- file input ---------------- */
+function triggerUpload(){ $('file-input').click(); }
+function handleFileSelect(e){
+  const file=e.target.files[0]; if(!file) return;
+  const rd=new FileReader();
+  rd.onload=ev=>{
+    const img=new Image();
+    img.onload=()=>{ srcImg=img; enterResScreen(); };
+    img.onerror=()=>showToast('圖片載入失敗，請重試');
+    img.src=ev.target.result;
+  };
+  rd.readAsDataURL(file);
+  e.target.value='';
+}
+
+/* ---------------- resolution screen ---------------- */
+function cappedDims(){
+  let w=srcImg.naturalWidth, h=srcImg.naturalHeight;
+  const m=Math.max(w,h);
+  if(m>MAX_SRC_DIM){ const f=MAX_SRC_DIM/m; w=Math.round(w*f); h=Math.round(h*f); }
+  return {w,h,capped:m>MAX_SRC_DIM};
+}
+function setPct(el){
+  chosenPct=+el.dataset.pct;
+  document.querySelectorAll('.chip').forEach(c=>c.classList.toggle('on',c===el));
+  updateResStats();
+}
+function updateResStats(){
+  const {w,h,capped}=cappedDims();
+  const f=chosenPct/100;
+  const cols=Math.max(2,Math.round(w*f)), rows=Math.max(2,Math.round(h*f));
+  $('res-stats').textContent=`${fmt(cols)} × ${fmt(rows)} ＝ ${fmt(cols*rows)} 格`;
+  $('res-note').textContent=capped?`（原圖 ${fmt(srcImg.naturalWidth)}×${fmt(srcImg.naturalHeight)}，邊長已縮至 ${MAX_SRC_DIM}）`:'';
+}
+function enterResScreen(){
+  $('res-preview').src=srcImg.src;
+  updateResStats();
+  showScreen('screen-res');
+}
+
+/* ================================================================
+   PUZZLE BUILD — one block per pixel, 12-bit palette
+   ================================================================ */
+function startGame(){
+  if(!srcImg){ showToast('請先拍攝或選擇一張照片！'); return; }
+  showOverlay('overlay-loading');
+  setTimeout(()=>{                       // let overlay paint first
+    try{ buildPuzzle(chosenPct/100); }
+    catch(err){ hideOverlay('overlay-loading'); showToast('生成失敗：圖片太大或記憶體不足'); console.error(err); return; }
+    hideOverlay('overlay-loading');
+    showScreen('screen-game');
+    requestAnimationFrame(()=>{ resizeMainCanvas(); resetView(); startTimer(); });
+    showToast('放大畫布即可看到每格編號 🔍');
+  },60);
+}
+
+function buildPuzzle(f){
+  const {w,h}=cappedDims();
+  const cols=Math.max(2,Math.round(w*f)), rows=Math.max(2,Math.round(h*f));
+  const n=cols*rows;
+
+  const off=document.createElement('canvas'); off.width=cols; off.height=rows;
+  const oc=off.getContext('2d',{willReadFrequently:true});
+  oc.imageSmoothingEnabled=true;
+  oc.drawImage(srcImg,0,0,cols,rows);
+  const data=oc.getImageData(0,0,cols,rows).data;
+
+  // pass 1 — quantize to 12-bit keys & count
+  const keys=new Uint16Array(n);
+  const counts=new Uint32Array(4096);
+  for(let i=0,p=0;i<n;i++,p+=4){
+    const r4=Math.round(data[p]*15/255), g4=Math.round(data[p+1]*15/255), b4=Math.round(data[p+2]*15/255);
+    const k=(r4<<8)|(g4<<4)|b4;
+    keys[i]=k; counts[k]++;
+  }
+
+  // pass 2 — palette (numbers in stable ascending order)
+  const keyToIdx=new Int16Array(4096).fill(-1);
+  const palette=[];
+  for(let k=0;k<4096;k++){
+    if(!counts[k]) continue;
+    keyToIdx[k]=palette.length;
+    const r=((k>>8)&15)*17, g=((k>>4)&15)*17, b=(k&15)*17;
+    const gray=Math.round(.299*r+.587*g+.114*b);
+    palette.push({
+      key:k, r,g,b, gray,
+      text: gray>150 ? '#111418' : '#FFFFFF',
+      num: String(palette.length+1),
+      total: counts[k], remaining: counts[k],
+      el:null, fillEl:null
+    });
+  }
+
+  // pass 3 — cell map + grayscale base
+  const indexMap=new Uint16Array(n);
+  const grayImg=new ImageData(cols,rows);
+  const gd=grayImg.data;
+  for(let i=0;i<n;i++){
+    const pi=keyToIdx[keys[i]];
+    indexMap[i]=pi;
+    const e=palette[pi], o=i*4;
+    gd[o]=e.gray; gd[o+1]=e.gray; gd[o+2]=e.gray; gd[o+3]=255;
+  }
+  const workImg=new ImageData(cols,rows);
+  workImg.data.set(grayImg.data);
+  const workCanvas=document.createElement('canvas'); workCanvas.width=cols; workCanvas.height=rows;
+  const workCtx=workCanvas.getContext('2d');
+  workCtx.putImageData(workImg,0,0);
+
+  P={ cols,rows,total:n,indexMap,
+      filled:new Uint8Array(n),
+      palette,keyToIdx,workImg,workCanvas,workCtx,
+      grayData:grayImg.data,
+      selected:-1,selectedEl:null,filledCount:0,
+      savedThisRound:false,startTs:Date.now(),elapsed:0 };
+  flashes=[];
+  renderPalette();
+  updateProgress();
+  $('num-input').value='';
+}
+
+/* ---------------- palette DOM ---------------- */
+function renderPalette(){
+  const box=$('palette-container'); box.innerHTML='';
+  const frag=document.createDocumentFragment();
+  P.palette.forEach((e,pi)=>{
+    const item=document.createElement('div');
+    item.className='pal-item';
+    const lum=e.gray;
+    item.innerHTML=
+      `<div class="pal-dot" style="background:rgb(${e.r},${e.g},${e.b})">
+         <span class="pal-num" style="color:${e.text};text-shadow:0 0 3px ${lum>150?'rgba(255,255,255,.7)':'rgba(0,0,0,.7)'}">${e.num}</span>
+       </div>
+       <div class="pal-bar"><i style="background:rgb(${e.r},${e.g},${e.b})"></i></div>`;
+    item.addEventListener('click',()=>select(pi,true));
+    e.el=item; e.fillEl=item.querySelector('.pal-bar i');
+    frag.appendChild(item);
+  });
+  box.appendChild(frag);
+}
+function updatePaletteItem(pi){
+  const e=P.palette[pi];
+  const pct=e.total?((e.total-e.remaining)/e.total*100):100;
+  e.fillEl.style.width=pct+'%';
+  if(e.remaining<=0){
+    e.el.style.display='none';
+    if(P.selected===pi) autoAdvance(pi);
+  }
+}
+function select(pi,scroll){
+  const e=P.palette[pi];
+  P.selected=pi;
+  $('num-input').value=e.num;
+  if(P.selectedEl) P.selectedEl.classList.remove('selected');
+  e.el.classList.add('selected'); P.selectedEl=e.el;
+  if(scroll) e.el.scrollIntoView({behavior:'smooth',inline:'center',block:'nearest'});
+}
+function autoAdvance(from){
+  const n=P.palette.length;
+  for(let k=1;k<=n;k++){
+    const j=(from+k)%n;
+    if(P.palette[j].remaining>0){
+      select(j,true);
+      showToast(`✅ 完成一色！已切換至編號 ${P.palette[j].num}`);
+      return;
+    }
+  }
+}
+function selectNumFromInput(){
+  const v=parseInt($('num-input').value,10);
+  if(!Number.isFinite(v)||v<1||v>P.palette.length){ showToast('編號不存在！'); return; }
+  const pi=v-1;
+  if(P.palette[pi].remaining<=0){ showToast(`編號 ${v} 已填完 ✓`); return; }
+  select(pi,true);
+}
+
+/* ================================================================
+   RENDER — screen canvas + viewport culling
+   ================================================================ */
+let stage=null, cvs=null, ctx=null, dpr=1;
+function resizeMainCanvas(){
+  stage=$('canvas-container'); cvs=$('main-canvas'); ctx=cvs.getContext('2d');
+  dpr=window.devicePixelRatio||1;
+  cvs.width=Math.round(stage.clientWidth*dpr);
+  cvs.height=Math.round(stage.clientHeight*dpr);
+  dirty=true;
+}
+function metrics(){
+  const W=stage.clientWidth,H=stage.clientHeight;
+  const base=Math.min(W/P.cols,H/P.rows);
+  const cell=base*view.scale;
+  const cw=P.cols*cell,ch=P.rows*cell;
+  return {W,H,base,cell,cw,ch,dx:(W-cw)/2+view.tx,dy:(H-ch)/2+view.ty};
+}
+function maxScale(){ const b=Math.min(stage.clientWidth/P.cols,stage.clientHeight/P.rows); return Math.max(8,96/b); }
+function applyView(){
+  if(!P) return;
+  const m=metrics();
+  view.tx=clamp(view.tx,-Math.max(0,(m.cw-m.W)/2),Math.max(0,(m.cw-m.W)/2));
+  view.ty=clamp(view.ty,-Math.max(0,(m.ch-m.H)/2),Math.max(0,(m.ch-m.H)/2));
+  dirty=true;
+}
+function resetView(){ view.scale=1; view.tx=0; view.ty=0; applyView(); }
+
+function render(){
+  if(!P||!ctx) return;
+  const m=metrics();
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.fillStyle='#0B0F15'; ctx.fillRect(0,0,m.W,m.H);
+
+  // board shadow + pixel layer
+  ctx.save();
+  ctx.shadowColor='rgba(0,0,0,.6)'; ctx.shadowBlur=26;
+  ctx.fillStyle='#222'; ctx.fillRect(m.dx,m.dy,m.cw,m.ch);
+  ctx.restore();
+  ctx.imageSmoothingEnabled=m.cell<2;
+  ctx.drawImage(P.workCanvas,m.dx,m.dy,m.cw,m.ch);
+
+  const c0=clamp(Math.floor(-m.dx/m.cell),0,P.cols), c1=clamp(Math.ceil((m.W-m.dx)/m.cell),0,P.cols);
+  const r0=clamp(Math.floor(-m.dy/m.cell),0,P.rows), r1=clamp(Math.ceil((m.H-m.dy)/m.cell),0,P.rows);
+
+  // grid lines
+  if(m.cell>=4){
+    ctx.strokeStyle=m.cell>=9?'rgba(8,12,18,.30)':'rgba(8,12,18,.18)';
+    ctx.lineWidth=1; ctx.beginPath();
+    for(let c=c0;c<=c1;c++){ const x=m.dx+c*m.cell; ctx.moveTo(x,m.dy); ctx.lineTo(x,m.dy+m.ch); }
+    for(let r=r0;r<=r1;r++){ const y=m.dy+r*m.cell; ctx.moveTo(m.dx,y); ctx.lineTo(m.dx+m.cw,y); }
+    ctx.stroke();
+  }
+  ctx.strokeStyle='rgba(255,255,255,.14)'; ctx.lineWidth=1;
+  ctx.strokeRect(m.dx+.5,m.dy+.5,m.cw-1,m.ch-1);
+
+  // numbers (only where legible)
+  if(m.cell>=12){
+    ctx.textAlign='center'; ctx.textBaseline='middle';
+    const size=[0, m.cell*.58, m.cell*.58, m.cell*.5, m.cell*.375];
+    const fontOf=l=>`700 ${size[l].toFixed(1)}px ${NUM_FONT}`;
+    let curLen=0;
+    for(let r=r0;r<r1;r++){
+      const y=m.dy+(r+.5)*m.cell, rowI=r*P.cols;
+      for(let c=c0;c<c1;c++){
+        const i=rowI+c;
+        if(P.filled[i]) continue;
+        const e=P.palette[P.indexMap[i]];
+        if(e.num.length!==curLen){ curLen=e.num.length; ctx.font=fontOf(curLen); }
+        ctx.lineWidth=Math.max(1.4,m.cell*.09); ctx.lineJoin='round';
+        ctx.strokeStyle=e.text==='#111418'?'rgba(255,255,255,.85)':'rgba(10,13,18,.85)';
+        ctx.fillStyle=e.text;
+        const x=m.dx+(c+.5)*m.cell;
+        ctx.strokeText(e.num,x,y);
+        ctx.fillText(e.num,x,y);
+      }
+    }
+  }
+
+  // wrong-tap flashes
+  const now=performance.now();
+  flashes=flashes.filter(f=>now-f.t<320);
+  for(const f of flashes){
+    const a=1-(now-f.t)/320;
+    ctx.fillStyle=`rgba(255,95,84,${(.55*a).toFixed(3)})`;
+    ctx.fillRect(m.dx+f.c*m.cell,m.dy+f.r*m.cell,m.cell,m.cell);
+  }
+  if(flashes.length) dirty=true;
+}
+(function loop(){ if(dirty){ dirty=false; render(); } requestAnimationFrame(loop); })();
+
+/* ================================================================
+   INTERACTION — paint / pan / pinch / wheel
+   ================================================================ */
+let painting=false, panning=false, pinch=null, panStart=null, lastPaint=-1, lastTap={t:0,x:0,y:0};
+const pointers=new Map();
+
+function cellFromEvent(e){
+  const rect=stage.getBoundingClientRect();
+  const m=metrics();
+  const c=Math.floor((e.clientX-rect.left-m.dx)/m.cell);
+  const r=Math.floor((e.clientY-rect.top-m.dy)/m.cell);
+  if(c<0||r<0||c>=P.cols||r>=P.rows) return null;
+  return {c,r};
+}
+function paintAt(e){
+  if(P.selected<0){ const now=Date.now(); if(!paintAt._w||now-paintAt._w>1800){paintAt._w=now;showToast('請先在下方選擇一個顏色');} return; }
+  const cell=cellFromEvent(e); if(!cell) return;
+  const i=cell.r*P.cols+cell.c;
+  if(i===lastPaint) return;
+  lastPaint=i;
+  if(P.filled[i]) return;
+  if(P.indexMap[i]!==P.selected){ flashes.push({c:cell.c,r:cell.r,t:performance.now()}); dirty=true; return; }
+  floodFill(cell.c,cell.r,P.indexMap[i]);
+}
+
+/* scanline flood fill of one connected same-number region */
+function floodFill(c0,r0,pi){
+  const {cols,rows,indexMap,filled,palette,workImg}=P;
+  const e=palette[pi], d=workImg.data;
+  const st=[r0*cols+c0];
+  let count=0,minX=c0,maxX=c0,minY=r0,maxY=r0;
+  while(st.length){
+    const s=st.pop();
+    if(filled[s]||indexMap[s]!==pi) continue;
+    const r=(s/cols)|0;
+    let i=s;
+    while(i%cols>0&&!filled[i-1]&&indexMap[i-1]===pi) i--;
+    let up=r>0,dn=r<rows-1;
+    while(i<rows*cols&&i%cols<cols&&!filled[i]&&indexMap[i]===pi){
+      filled[i]=1;
+      const o=i*4; d[o]=e.r; d[o+1]=e.g; d[o+2]=e.b;
+      count++;
+      const c=i%cols;
+      if(c<minX)minX=c; if(c>maxX)maxX=c;
+      if(r<minY)minY=r; if(r>maxY)maxY=r;
+      if(up){ const u=i-cols; if(!filled[u]&&indexMap[u]===pi) st.push(u); }
+      if(dn){ const w=i+cols; if(!filled[w]&&indexMap[w]===pi) st.push(w); }
+      i++;
+    }
+  }
+  P.filledCount+=count;
+  e.remaining-=count;
+  P.workCtx.putImageData(workImg,0,0,minX,minY,maxX-minX+1,maxY-minY+1);
+  dirty=true;
+  updatePaletteItem(pi);
+  updateProgress();
+  if(P.filledCount===P.total) win();
+}
+
+function zoomAt(px,py,factor){
+  const m=metrics();
+  const u=(px-m.dx)/m.cell, v=(py-m.dy)/m.cell;
+  const ns=clamp(view.scale*factor,1,maxScale());
+  const cell2=m.base*ns;
+  view.scale=ns;
+  view.tx=px-u*cell2-(m.W-P.cols*cell2)/2;
+  view.ty=py-v*cell2-(m.H-P.rows*cell2)/2;
+  applyView();
+}
+
+let eventsBound=false;
+function setupEvents(){
+  if(eventsBound) return; eventsBound=true;
+  stage=$('canvas-container');
+
+  stage.addEventListener('pointerdown',e=>{
+    if(!P) return;
+    stage.setPointerCapture(e.pointerId);
+    pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
+    if(pointers.size===1){
+      if(e.button===2||e.button===1){ panning=true; panStart={x:e.clientX,y:e.clientY,tx:view.tx,ty:view.ty}; }
+      else{ painting=true; lastPaint=-1; paintAt(e); }
+    }else if(pointers.size===2){
+      painting=false; panning=false;
+      const [a,b]=[...pointers.values()];
+      const rect=stage.getBoundingClientRect();
+      const mid={x:(a.x+b.x)/2-rect.left,y:(a.y+b.y)/2-rect.top};
+      const m=metrics();
+      pinch={d0:Math.hypot(a.x-b.x,a.y-b.y)||1,s0:view.scale,u:(mid.x-m.dx)/m.cell,v:(mid.y-m.dy)/m.cell};
+    }
+  });
+
+  stage.addEventListener('pointermove',e=>{
+    if(!pointers.has(e.pointerId)) return;
+    pointers.get(e.pointerId).x=e.clientX; pointers.get(e.pointerId).y=e.clientY;
+    if(pinch&&pointers.size>=2){
+      const [a,b]=[...pointers.values()];
+      const rect=stage.getBoundingClientRect();
+      const d=Math.hypot(a.x-b.x,a.y-b.y)||1;
+      const mid={x:(a.x+b.x)/2-rect.left,y:(a.y+b.y)/2-rect.top};
+      const ns=clamp(pinch.s0*d/pinch.d0,1,maxScale());
+      const cell2=metrics().base*ns, m=metrics();
+      view.scale=ns;
+      view.tx=mid.x-pinch.u*cell2-(m.W-P.cols*cell2)/2;
+      view.ty=mid.y-pinch.v*cell2-(m.H-P.rows*cell2)/2;
+      applyView();
+    }else if(panning&&panStart){
+      view.tx=panStart.tx+(e.clientX-panStart.x);
+      view.ty=panStart.ty+(e.clientY-panStart.y);
+      applyView();
+    }else if(painting&&pointers.size===1){
+      paintAt(e);
+    }
+  });
+
+  const endPointer=e=>{
+    if(!pointers.has(e.pointerId)) return;
+    const wasPainting=painting&&pointers.size===1;
+    pointers.delete(e.pointerId);
+    if(pointers.size<2) pinch=null;
+    if(pointers.size===0){
+      painting=false; panning=false; panStart=null;
+      if(wasPainting&&e.pointerType!=='mouse'){
+        const now=Date.now();
+        if(now-lastTap.t<320&&Math.hypot(e.clientX-lastTap.x,e.clientY-lastTap.y)<30) resetView();
+        lastTap={t:now,x:e.clientX,y:e.clientY};
+      }
+    }
+  };
+  stage.addEventListener('pointerup',endPointer);
+  stage.addEventListener('pointercancel',endPointer);
+
+  stage.addEventListener('wheel',e=>{
+    e.preventDefault(); if(!P) return;
+    const rect=stage.getBoundingClientRect();
+    zoomAt(e.clientX-rect.left,e.clientY-rect.top,e.deltaY<0?1.18:1/1.18);
+  },{passive:false});
+
+  stage.addEventListener('contextmenu',e=>e.preventDefault());
+  stage.addEventListener('dblclick',()=>resetView());
+  document.addEventListener('gesturestart',e=>e.preventDefault());
+
+  // hold-to-peek original photo
+  const peek=$('peek-btn'), peekImg=$('peek-img');
+  const peekOn=e=>{e.preventDefault(); if(!srcImg)return; peekImg.src=srcImg.src; peekImg.style.display='block'; peek.classList.add('hold');};
+  const peekOff=()=>{peekImg.style.display='none'; peek.classList.remove('hold');};
+  peek.addEventListener('pointerdown',peekOn);
+  ['pointerup','pointerleave','pointercancel'].forEach(ev=>peek.addEventListener(ev,peekOff));
+
+  $('num-input').addEventListener('input',e=>{ e.target.value=e.target.value.replace(/\D/g,''); });
+  $('num-input').addEventListener('keydown',e=>{ if(e.key==='Enter') selectNumFromInput(); });
+
+  window.addEventListener('resize',()=>{ if(P) resizeMainCanvas(); });
+  window.addEventListener('orientationchange',()=>setTimeout(()=>{ if(P) resizeMainCanvas(); },300));
+}
+
+/* ================================================================
+   PROGRESS / TIMER / HINT / RESET
+   ================================================================ */
+function updateProgress(){
+  const pct=P.total?Math.round(P.filledCount/P.total*100):0;
+  const c=$('progress-circle'), C=2*Math.PI*c.r.baseVal.value;
+  c.style.strokeDasharray=`${C} ${C}`;
+  c.style.strokeDashoffset=C-(pct/100)*C;
+  $('progress-text').textContent=pct+'%';
+}
+let timerId=null;
+function fmtTime(ms){
+  const s=Math.floor(ms/1000), h=Math.floor(s/3600), m=Math.floor(s%3600/60), ss=s%60;
+  return (h?h+':':'')+String(m).padStart(h?2:1,'0')+':'+String(ss).padStart(2,'0');
+}
+function startTimer(){
+  stopTimer(); if(!P) return;
+  P.startTs=Date.now(); $('timer').textContent='0:00';
+  timerId=setInterval(()=>{ $('timer').textContent=fmtTime(Date.now()-P.startTs); },500);
+}
+function stopTimer(){
+  if(timerId){ clearInterval(timerId); timerId=null; }
+  if(P&&P.startTs&&!P.elapsed) P.elapsed=Date.now()-P.startTs;
+}
+function useHint(){
+  if(!P) return;
+  if(P.filledCount===P.total) return;
+  let i=(Math.random()*P.total)|0, tries=0;
+  while(P.filled[i]&&++tries<300) i=(Math.random()*P.total)|0;
+  if(P.filled[i]) for(let j=0;j<P.total;j++){ if(!P.filled[j]){ i=j; break; } }
+  const pi=P.indexMap[i];
+  select(pi,true);
+  showToast(`💡 提示：尋找編號 ${P.palette[pi].num}`);
+}
+function resetGrid(){
+  if(!P) return;
+  P.filled.fill(0); P.filledCount=0;
+  P.workImg.data.set(P.grayData);
+  P.workCtx.putImageData(P.workImg,0,0);
+  P.palette.forEach((e,pi)=>{ e.remaining=e.total; e.el.style.display='flex'; e.fillEl.style.width='0%'; });
+  P.savedThisRound=false;
+  if(P.selected>=0) select(P.selected,false);
+  updateProgress(); dirty=true; startTimer();
+  showToast('↺ 已重置畫布');
+}
+
+/* ================================================================
+   WIN / SAVE / GALLERY / VIEWER
+   ================================================================ */
+function makeResultURL(maxDim,quality){
+  const f=Math.min(maxDim/Math.max(P.cols,P.rows),80);
+  const out=document.createElement('canvas');
+  out.width=Math.max(1,Math.round(P.cols*f));
+  out.height=Math.max(1,Math.round(P.rows*f));
+  const c=out.getContext('2d');
+  c.imageSmoothingEnabled=f<1;                 // crisp pixel-art look
+  c.drawImage(P.workCanvas,0,0,out.width,out.height);
+  return out.toDataURL('image/jpeg',quality);
+}
+function win(){
+  stopTimer();
+  setTimeout(()=>{
+    $('complete-preview').src=makeResultURL(900,.85);
+    $('complete-stats').innerHTML=
+      `<span class="stat-chip">🧱 <b>${fmt(P.total)}</b> 格</span>`+
+      `<span class="stat-chip">🎨 <b>${P.palette.length}</b> 色</span>`+
+      `<span class="stat-chip">⏱ <b>${fmtTime(P.elapsed)}</b></span>`;
+    showOverlay('overlay-complete');
+  },450);
+}
+function replay(){ hideOverlay('overlay-complete'); resetGrid(); }
+function downloadURL(url,name){
+  const a=document.createElement('a');
+  a.href=url; a.download=name; document.body.appendChild(a); a.click(); a.remove();
+}
+function downloadCurrent(){ downloadURL(makeResultURL(1600,.9),`SnapPaint_${Date.now()}.jpg`); showToast('⬇️ 已下載'); }
+
+function saveArtwork(){
+  if(!P) return;
+  if(P.savedThisRound){ showToast('這幅作品已儲存過了'); return; }
+  let g=JSON.parse(localStorage.getItem('snapPaintGallery')||'[]');
+  g.unshift({
+    id:Date.now(), image:makeResultURL(1280,.8),
+    date:new Date().toLocaleDateString('zh-TW'),
+    w:P.cols,h:P.rows,colors:P.palette.length,time:fmtTime(P.elapsed)
+  });
+  while(g.length>15) g.pop();
+  let ok=false;
+  while(!ok&&g.length){
+    try{ localStorage.setItem('snapPaintGallery',JSON.stringify(g)); ok=true; }
+    catch(e){ g.pop(); }
+  }
+  if(ok){ P.savedThisRound=true; showToast('💾 作品已儲存！'); }
+  else showToast('儲存空間不足，無法儲存');
+}
+
+function showGallery(){
+  showScreen('screen-gallery');
+  const grid=$('gallery-grid'); grid.innerHTML='';
+  const g=JSON.parse(localStorage.getItem('snapPaintGallery')||'[]');
+  if(!g.length){
+    grid.innerHTML='<p class="empty-msg">尚無儲存作品<br>完成一幅拼圖後，可以在這裡回顧 🎨</p>';
+    return;
+  }
+  g.forEach(item=>{
+    const div=document.createElement('div');
+    div.className='gallery-item';
+    div.innerHTML=`<img src="${item.image}" alt="作品">
+      <div class="gallery-meta"><b>${item.date}</b><span>${item.w}×${item.h}</span></div>`;
+    div.addEventListener('click',()=>openViewer(item));
+    grid.appendChild(div);
+  });
+}
+function clearGallery(){
+  if(confirm('確定要清空所有作品嗎？')){
+    localStorage.removeItem('snapPaintGallery');
+    showGallery(); showToast('已清空');
+  }
+}
+
+/* ---- full-screen artwork viewer (pinch / drag / scroll zoom) ---- */
+let viewerItem=null;
+const V={s:1,tx:0,ty:0};
+function openViewer(item){
+  viewerItem=item;
+  const img=$('viewer-img');
+  img.src=item.image;
+  $('viewer-title').textContent=`${item.w}×${item.h}・${item.colors||'?'} 色`;
+  $('viewer-sub').textContent=`${item.date}・用時 ${item.time||'--'}`;
+  V.s=1;V.tx=0;V.ty=0;
+  img.style.transform='';
+  showOverlay('overlay-viewer');
+}
+function applyV(){
+  const img=$('viewer-img'), st=$('viewer-stage');
+  const ew=img.offsetWidth*V.s, eh=img.offsetHeight*V.s;
+  const mx=Math.max(0,(ew-st.clientWidth)/2), my=Math.max(0,(eh-st.clientHeight)/2);
+  V.tx=clamp(V.tx,-mx,mx); V.ty=clamp(V.ty,-my,my);
+  img.style.transform=`translate(${V.tx}px,${V.ty}px) scale(${V.s})`;
+}
+(function setupViewer(){
+  const st=$('viewer-stage');
+  const vPts=new Map(); let vPinch=null,vPan=null,vLastTap={t:0};
+  st.addEventListener('pointerdown',e=>{
+    st.setPointerCapture(e.pointerId);
+    vPts.set(e.pointerId,{x:e.clientX,y:e.clientY});
+    if(vPts.size===1) vPan={x:e.clientX,y:e.clientY,tx:V.tx,ty:V.ty};
+    else if(vPts.size===2){
+      vPan=null;
+      const [a,b]=[...vPts.values()];
+      const rect=st.getBoundingClientRect(), img=$('viewer-img');
+      const mid={x:(a.x+b.x)/2-rect.left,y:(a.y+b.y)/2-rect.top};
+      const ew=img.offsetWidth*V.s, eh=img.offsetHeight*V.s;
+      const dx=(rect.width-ew)/2+V.tx, dy=(rect.height-eh)/2+V.ty;
+      vPinch={d0:Math.hypot(a.x-b.x,a.y-b.y)||1,s0:V.s,u:(mid.x-dx)/V.s,v:(mid.y-dy)/V.s};
+    }
+  });
+  st.addEventListener('pointermove',e=>{
+    if(!vPts.has(e.pointerId)) return;
+    vPts.get(e.pointerId).x=e.clientX; vPts.get(e.pointerId).y=e.clientY;
+    const stR=st.getBoundingClientRect(), img=$('viewer-img');
+    if(vPinch&&vPts.size>=2){
+      const [a,b]=[...vPts.values()];
+      const d=Math.hypot(a.x-b.x,a.y-b.y)||1;
+      const mid={x:(a.x+b.x)/2-stR.left,y:(a.y+b.y)/2-stR.top};
+      V.s=clamp(vPinch.s0*d/vPinch.d0,1,12);
+      V.tx=mid.x-vPinch.u*V.s-(stR.width-img.offsetWidth*V.s)/2;
+      V.ty=mid.y-vPinch.v*V.s-(stR.height-img.offsetHeight*V.s)/2;
+      applyV();
+    }else if(vPan&&vPts.size===1){
+      V.tx=vPan.tx+(e.clientX-vPan.x); V.ty=vPan.ty+(e.clientY-vPan.y);
+      applyV();
+    }
+  });
+  const vEnd=e=>{
+    if(!vPts.has(e.pointerId)) return;
+    const wasOne=vPts.size===1;
+    vPts.delete(e.pointerId);
+    if(vPts.size<2)vPinch=null;
+    if(vPts.size===0){
+      if(wasOne){
+        const now=Date.now();
+        if(now-vLastTap.t<320){ V.s=1;V.tx=0;V.ty=0;applyV(); }
+        vLastTap.t=now;
+      }
+      vPan=null;
+    }
+  };
+  st.addEventListener('pointerup',vEnd);
+  st.addEventListener('pointercancel',vEnd);
+  st.addEventListener('wheel',e=>{
+    e.preventDefault();
+    V.s=clamp(V.s*(e.deltaY<0?1.18:1/1.18),1,12);
+    applyV();
+  },{passive:false});
+  st.addEventListener('contextmenu',e=>e.preventDefault());
+})();
+function downloadViewerItem(){ if(viewerItem) downloadURL(viewerItem.image,`SnapPaint_${viewerItem.id}.jpg`); }
+function deleteViewerItem(){
+  if(!viewerItem||!confirm('刪除這幅作品？')) return;
+  let g=JSON.parse(localStorage.getItem('snapPaintGallery')||'[]');
+  g=g.filter(x=>x.id!==viewerItem.id);
+  localStorage.setItem('snapPaintGallery',JSON.stringify(g));
+  hideOverlay('overlay-viewer');
+  showGallery(); showToast('已刪除');
+}
+
+/* ---------------- boot ---------------- */
+function goHome(){
+  hideOverlay('overlay-complete');
+  stopTimer();
+  if(P) P.elapsed=0;
+  resetView();
+  showScreen('screen-menu');
+}
+setupEvents();
+</script>
+</body>
+</html>
