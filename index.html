@@ -65,7 +65,7 @@ body::before{
 #res-preview{width:150px;height:150px;object-fit:cover;border-radius:18px;border:1px solid var(--line);box-shadow:0 10px 26px rgba(0,0,0,.45);margin-bottom:16px}
 #res-stats{font-family:var(--mono);font-size:1rem;color:var(--accent);background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 18px;margin-bottom:8px}
 #res-note{color:var(--muted);font-size:.82rem;min-height:1.3em;margin-bottom:14px}
-.chips{display:flex;gap:8px;margin-bottom:18px}
+.chips{display:flex;gap:8px;margin-bottom:18px;flex-wrap:wrap;justify-content:center;max-width:360px}
 .chip{padding:9px 14px;border-radius:999px;border:1px solid var(--line);background:var(--panel);color:var(--muted);font-size:.88rem;font-weight:700;cursor:pointer;transition:all .15s}
 .chip.on{background:var(--accent);border-color:var(--accent);color:#fff;box-shadow:0 4px 12px rgba(94,160,242,.4)}
 .res-hint{color:var(--muted);font-size:.8rem;line-height:1.7;max-width:340px;margin-top:16px}
@@ -178,10 +178,13 @@ body::before{
   <div id="res-stats">— × —</div>
   <div id="res-note"></div>
   <div class="chips">
-    <button class="chip on" data-pct="100" onclick="setPct(this)">100% 完整</button>
-    <button class="chip" data-pct="50" onclick="setPct(this)">50%</button>
-    <button class="chip" data-pct="25" onclick="setPct(this)">25%</button>
-  </div>
+  <button class="chip on" data-pct="100" onclick="setPct(this)">1x 完整</button>
+  <button class="chip" data-pct="50" onclick="setPct(this)">1/2x</button>
+  <button class="chip" data-pct="25" onclick="setPct(this)">1/4x</button>
+  <button class="chip" data-pct="12.5" onclick="setPct(this)">1/8x</button>
+  <button class="chip" data-pct="6.25" onclick="setPct(this)">1/16x</button>
+  <button class="chip" data-pct="3.125" onclick="setPct(this)">1/32x</button>
+</div>
   <button class="btn" onclick="startGame()">🎨 開始挑戰</button>
   <button class="btn btn-ghost" onclick="showScreen('screen-menu')">返回</button>
   <p class="res-hint">💡 單指 / 左鍵＝填色（同色區域會整片填滿）<br>雙指 / 右鍵拖曳＝平移・縮放　雙擊＝回到全覽　💡提示可幫你選色</p>
