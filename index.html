@@ -78,7 +78,6 @@ body::before{
 }
 .hud .icon-btn{background:var(--panel2);border:1px solid var(--line);color:var(--text);border-radius:10px;padding:7px 11px;font-size:1rem;cursor:pointer;transition:background .15s,transform .1s;flex-shrink:0}
 .hud .icon-btn:active{transform:scale(.94);background:#26324333}
-.hud .icon-btn.hold{background:var(--accent);color:#fff}
 .hud-center{flex:1;display:flex;align-items:center;justify-content:center;gap:12px;min-width:0}
 .progress-container{position:relative;width:44px;height:44px;flex-shrink:0}
 .progress-ring{transform:rotate(-90deg)}
@@ -89,19 +88,42 @@ body::before{
 
 #canvas-container{flex:1;min-height:0;position:relative;overflow:hidden;background:#0B0F15;width:100%;touch-action:none;cursor:crosshair}
 #main-canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
-#peek-img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:rgba(8,11,16,.94);display:none;z-index:5;pointer-events:none}
 
 #bottom-panel{background:var(--panel);border-top:1px solid var(--line);padding:8px 10px 10px;display:flex;flex-direction:column;gap:9px;z-index:10;flex-shrink:0}
 #palette-container{display:flex;gap:14px;overflow-x:auto;padding:6px 4px 2px;scrollbar-width:thin;scrollbar-color:#31405A transparent}
 #palette-container::-webkit-scrollbar{height:5px}
 #palette-container::-webkit-scrollbar-thumb{background:#31405A;border-radius:3px}
-.pal-item{display:flex;flex-direction:column;align-items:center;gap:5px;flex-shrink:0;cursor:pointer}
+.pal-item{display:flex;flex-direction:column;align-items:center;gap:5px;flex-shrink:0;cursor:pointer;transition:opacity 0.2s ease, transform 0.15s ease;}
+.pal-item:not(.selected){opacity:0.55}
 .pal-dot{
   width:48px;height:48px;border-radius:50%;display:flex;justify-content:center;align-items:center;
   border:3px solid rgba(255,255,255,.14);box-shadow:0 3px 8px rgba(0,0,0,.4);
-  transition:transform .15s ease,border-color .15s ease,box-shadow .15s ease;
+  transition:transform .15s ease,border-color .15s ease,box-shadow .15s ease,border-width .15s ease;
 }
-.pal-item.selected .pal-dot{border-color:var(--warn);transform:scale(1.12);box-shadow:0 0 0 3px rgba(255,197,61,.28),0 4px 12px rgba(0,0,0,.5)}
+.pal-item.selected .pal-dot{
+  border-color:var(--warn);
+  transform:scale(1.25);
+  border-width:4px;
+  box-shadow: 
+    0 0 0 4px rgba(255,197,61,.28),
+    0 0 20px rgba(255,197,61,.4),
+    0 6px 16px rgba(0,0,0,.5);
+  animation: pulseGlow 2s ease-in-out infinite;
+}
+@keyframes pulseGlow {
+  0%, 100% {
+    box-shadow: 
+      0 0 0 4px rgba(255,197,61,.28),
+      0 0 20px rgba(255,197,61,.4),
+      0 6px 16px rgba(0,0,0,.5);
+  }
+  50% {
+    box-shadow: 
+      0 0 0 6px rgba(255,197,61,.4),
+      0 0 28px rgba(255,197,61,.6),
+      0 8px 20px rgba(0,0,0,.6);
+  }
+}
 .pal-num{font-family:var(--mono);font-weight:700;font-size:1rem;pointer-events:none}
 .pal-bar{width:48px;height:5px;background:rgba(255,255,255,.1);border-radius:3px;overflow:hidden}
 .pal-bar i{display:block;height:100%;width:0%;border-radius:3px;transition:width .3s ease}
@@ -187,7 +209,7 @@ body::before{
 </div>
   <button class="btn" onclick="startGame()">🎨 開始挑戰</button>
   <button class="btn btn-ghost" onclick="showScreen('screen-menu')">返回</button>
-  <p class="res-hint">💡 單指 / 左鍵＝填色（同色區域會整片填滿）<br>雙指 / 右鍵拖曳＝平移・縮放　雙擊＝回到全覽　💡提示可幫你選色</p>
+  <p class="res-hint">💡 單指 / 左鍵＝填色（同色區域會整片填滿）<br>雙指 / 右鍵拖曳＝平移・縮放 雙擊＝回到全覽</p>
 </div>
 
 <!-- ============ GAME ============ -->
@@ -204,13 +226,10 @@ body::before{
       </div>
       <span id="timer">0:00</span>
     </div>
-    <button class="icon-btn" id="peek-btn" title="按住查看原圖">👁</button>
-    <button class="icon-btn" onclick="useHint()">💡</button>
   </div>
 
   <div id="canvas-container">
     <canvas id="main-canvas"></canvas>
-    <img id="peek-img" alt="原圖">
   </div>
 
   <div id="bottom-panel">
@@ -703,13 +722,6 @@ function setupEvents(){
   stage.addEventListener('dblclick',()=>resetView());
   document.addEventListener('gesturestart',e=>e.preventDefault());
 
-  // hold-to-peek original photo
-  const peek=$('peek-btn'), peekImg=$('peek-img');
-  const peekOn=e=>{e.preventDefault(); if(!srcImg)return; peekImg.src=srcImg.src; peekImg.style.display='block'; peek.classList.add('hold');};
-  const peekOff=()=>{peekImg.style.display='none'; peek.classList.remove('hold');};
-  peek.addEventListener('pointerdown',peekOn);
-  ['pointerup','pointerleave','pointercancel'].forEach(ev=>peek.addEventListener(ev,peekOff));
-
   $('num-input').addEventListener('input',e=>{ e.target.value=e.target.value.replace(/\D/g,''); });
   $('num-input').addEventListener('keydown',e=>{ if(e.key==='Enter') selectNumFromInput(); });
 
@@ -718,7 +730,7 @@ function setupEvents(){
 }
 
 /* ================================================================
-   PROGRESS / TIMER / HINT / RESET
+   PROGRESS / TIMER / RESET
    ================================================================ */
 function updateProgress(){
   const pct=P.total?Math.round(P.filledCount/P.total*100):0;
@@ -740,16 +752,6 @@ function startTimer(){
 function stopTimer(){
   if(timerId){ clearInterval(timerId); timerId=null; }
   if(P&&P.startTs&&!P.elapsed) P.elapsed=Date.now()-P.startTs;
-}
-function useHint(){
-  if(!P) return;
-  if(P.filledCount===P.total) return;
-  let i=(Math.random()*P.total)|0, tries=0;
-  while(P.filled[i]&&++tries<300) i=(Math.random()*P.total)|0;
-  if(P.filled[i]) for(let j=0;j<P.total;j++){ if(!P.filled[j]){ i=j; break; } }
-  const pi=P.indexMap[i];
-  select(pi,true);
-  showToast(`💡 提示：尋找編號 ${P.palette[pi].num}`);
 }
 function resetGrid(){
   if(!P) return;
