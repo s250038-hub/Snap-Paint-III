@@ -128,9 +128,11 @@ body::before{
 .pal-bar{width:48px;height:5px;background:rgba(255,255,255,.1);border-radius:3px;overflow:hidden}
 .pal-bar i{display:block;height:100%;width:0%;border-radius:3px;transition:width .3s ease}
 #toolbar{display:flex;gap:9px;align-items:center}
-#toolbar .tbtn{flex:1;padding:10px;border:1px solid var(--line);background:var(--panel2);color:var(--text);border-radius:10px;font-size:.95rem;font-weight:700;cursor:pointer}
+#toolbar .tbtn{flex:1;padding:10px;border:1px solid var(--line);background:var(--panel2);color:var(--text);border-radius:10px;font-size:.95rem;font-weight:700;cursor:pointer;transition:background .15s,border-color .15s,color .15s}
 #toolbar .tbtn:active{transform:scale(.97)}
 #toolbar .tbtn.primary{background:var(--accent);border-color:var(--accent);color:#fff;flex:0.7}
+#toolbar .tbtn.danger-armed{background:var(--bad);border-color:var(--bad);color:#fff;animation:armPulse .8s ease-in-out infinite}
+@keyframes armPulse{0%,100%{opacity:1}50%{opacity:.7}}
 #num-input{flex:1.8;padding:10px;border:1px solid var(--line);border-radius:10px;background:#0F1520;color:var(--text);text-align:center;font-family:var(--mono);font-size:1.2rem;font-weight:700;letter-spacing:3px;outline:none}
 #num-input:focus{border-color:var(--accent)}
 
@@ -243,7 +245,7 @@ body::before{
   <div id="bottom-panel">
     <div id="palette-container"></div>
     <div id="toolbar">
-      <button class="tbtn" onclick="resetGrid()">↺ 重置</button>
+      <button class="tbtn" id="reset-btn" onclick="confirmReset()">↺ 重置</button>
       <input type="text" id="num-input" placeholder="編號" maxlength="4" inputmode="numeric" autocomplete="off">
       <button class="tbtn primary" onclick="selectNumFromInput()">選擇</button>
     </div>
@@ -729,7 +731,7 @@ function setupEvents(){
 }
 
 /* ================================================================
-   PROGRESS / TIMER / RESET
+   PROGRESS / TIMER / RESET (double-confirm)
    ================================================================ */
 function updateProgress(){
   const pct=P.total?Math.round(P.filledCount/P.total*100):0;
@@ -752,6 +754,30 @@ function stopTimer(){
   if(timerId){ clearInterval(timerId); timerId=null; }
   if(P&&P.startTs&&!P.elapsed) P.elapsed=Date.now()-P.startTs;
 }
+
+/* ---- double-confirm reset ---- */
+let resetArmed=false, resetArmTimer=null;
+function confirmReset(){
+  if(!P) return;
+  const btn=$('reset-btn');
+  if(!resetArmed){
+    resetArmed=true;
+    btn.textContent='⚠️ 再點確認';
+    btn.classList.add('danger-armed');
+    resetArmTimer=setTimeout(()=>{ disarmReset(); showToast('已取消重置'); },3000);
+  }else{
+    clearTimeout(resetArmTimer);
+    disarmReset();
+    resetGrid();
+  }
+}
+function disarmReset(){
+  const btn=$('reset-btn');
+  resetArmed=false;
+  btn.textContent='↺ 重置';
+  btn.classList.remove('danger-armed');
+}
+
 function resetGrid(){
   if(!P) return;
   P.filled.fill(0); P.filledCount=0;
@@ -932,6 +958,7 @@ function deleteViewerItem(){
 function goHome(){
   hideOverlay('overlay-complete');
   stopTimer();
+  disarmReset();
   if(P) P.elapsed=0;
   resetView();
   showScreen('screen-menu');
