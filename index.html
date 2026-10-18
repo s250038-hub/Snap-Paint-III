@@ -547,14 +547,11 @@ function selectNumFromInput(){
   select(pi,true);
 }
 
-/* 油漆筒只在「按壓中」是填滿狀態；一旦放開或滑鼠／手指離開按鈕，立刻回到經典刷子 */
+/* 油漆筒為「切換式開關」：點一下開啟／關閉。
+   開啟＝拖動自動填滿所有附近的同編號區域；關閉＝經典刷子，掃到哪一格只填那一格 */
 function disarmTool(){ armTool(false); }
 function bindToolBtn(){
-  toolBtn.addEventListener('pointerdown',()=>{ setToolColor(); armTool(true); });
-  ['pointerup','pointercancel','pointerleave'].forEach(ev=>toolBtn.addEventListener(ev,disarmTool));
-  window.addEventListener('pointerup',disarmTool);
-  window.addEventListener('blur',disarmTool);
-  toolBtn.addEventListener('click',()=>showToast(P?'🖌️ 油漆筒：在畫布上按住拖動，即以選取顏色填滿附近區域':'🖌️ 油漆筒：開始挑戰後即可使用'));
+  toolBtn.addEventListener('click',()=>{ if(!P){ showToast('🖌️ 油漆筒：開始挑戰後即可使用'); return; } toggleBucket(); });
 }
 
 /* ================================================================
@@ -562,6 +559,9 @@ function bindToolBtn(){
    ================================================================ */
 let stage=null, cvs=null, ctx=null, dpr=1;
 const toolBtn=$('tool-btn'), toolCursor=$('tool-cursor');
+// 開關狀態下游標／按鈕顏色需跟著選取色更新（油漆筒開啟時）
+const _origSelect=select;
+select=function(pi,scroll){ _origSelect(pi,scroll); if(bucketOn) setToolColor(); };
 bindToolBtn();
 function resizeMainCanvas(){
   stage=$('canvas-container'); cvs=$('main-canvas'); ctx=cvs.getContext('2d');
@@ -662,17 +662,31 @@ function render(){
 let painting=false, panning=false, pinch=null, panStart=null, lastPaint=-1, lastTap={t:0,x:0,y:0};
 const pointers=new Map();
 
-/* 未按壓：經典刷子外觀；按壓中：油漆筒填滿選取顏色，並填滿附近同色區域 */
-let toolArmed=false;
+/* 油漆筒「開啟」＝切換式開關：開啟時拖曳會自動填滿所有相鄰的同編號區域；
+   關閉時只是經典刷子——手指／滑鼠掃到哪一格就只填那一格。 */
+let toolArmed=false, bucketOn=false;
 function setToolColor(){
   const e=(P&&P.selected>=0)?P.palette[P.selected]:null;
   document.body.style.setProperty('--tool-color',e?`rgb(${e.r},${e.g},${e.b})`:'#5EA0F2');
 }
+function updateBucketUI(){
+  document.body.classList.toggle('bucket-on',bucketOn);
+  toolBtn.classList.toggle('active',bucketOn);
+  toolBtn.setAttribute('aria-pressed',bucketOn?'true':'false');
+  const lbl=$('tool-mode'); if(lbl) lbl.textContent=bucketOn?'油漆筒':'刷子';
+}
+function toggleBucket(){
+  bucketOn=!bucketOn;
+  if(bucketOn) setToolColor(); // 開啟時游標／刷子頭部立即沾上選取顏色
+  updateBucketUI();
+  showToast(bucketOn?'🪣 油漆筒已開啟：拖動將自動填滿所有附近的同編號區域':'🖌️ 油漆筒已關閉：掃到哪一格就只填那一格');
+}
+/* 刷子游標：油漆筒「開啟」或按住拖動中，顯示沾滿選取顏色的油漆筒；關閉且未按住時維持系統游標 */
 function armTool(on){
   if(toolArmed===on) return;
   toolArmed=on;
-  document.body.classList.toggle('tool-armed',on);
-  toolBtn.setAttribute('aria-pressed',on?'true':'false');
+  document.body.classList.toggle('tool-armed',on||bucketOn);
+  toolBtn.setAttribute('aria-pressed',(on||bucketOn)?'true':'false');
 }
 function moveToolCursor(e){
   const rect=stage.getBoundingClientRect();
@@ -689,14 +703,43 @@ function cellFromEvent(e){
   return {c,r};
 }
 function paintAt(e){
-  if(P.selected<0){ const now=Date.now(); if(!paintAt._w||now-paintAt._w>1800){paintAt._w=now;showToast('請先在下方選擇一個顏色');} return; }
+  if(!P||P.selected<0) return;
   const cell=cellFromEvent(e); if(!cell) return;
   const i=cell.r*P.cols+cell.c;
   if(i===lastPaint) return;
   lastPaint=i;
-  if(P.filled[i]) return;
-  if(P.indexMap[i]!==P.selected){ flashes.push({c:cell.c,r:cell.r,t:performance.now()}); dirty=true; return; }
-  floodFill(cell.c,cell.r,P.indexMap[i]);
+  doPaint(cell,i);
+}
+
+/* 依模式執行實際塗色（呼叫前已確認該格未填、編號相符） */
+function applyPaint(cell,i){
+  // 油漆筒「開啟」→ 自動填滿所有附近的同編號連通區域
+  if(bucketOn){ floodFill(cell.c,cell.r,P.indexMap[i]); return; }
+  // 油漆筒「關閉」→ 經典刷子：掃到哪一格就只填那一格
+  paintSingleCell(cell.c,cell.r);
+}
+
+/* 對指定格子上色＋模式判斷；回傳是否實際塗了東西 */
+function doPaint(cell,i){
+  if(P.filled[i]) return false;
+  if(P.indexMap[i]!==P.selected){ flashes.push({c:cell.c,r:cell.r,t:performance.now()}); dirty=true; return false; }
+  applyPaint(cell,i);
+  return true;
+}
+
+/* 單格塗抹：只上色的當前這一格，不做連通區塊搜尋 */
+function paintSingleCell(c,r){
+  const {cols,indexMap,filled,palette,workImg}=P;
+  const pi=indexMap[r*cols+c], e=palette[pi], d=workImg.data;
+  filled[r*cols+c]=1;
+  const o=(r*cols+c)*4; d[o]=e.r; d[o+1]=e.g; d[o+2]=e.b;
+  P.filledCount++;
+  e.remaining--;
+  P.workCtx.putImageData(workImg,c,r,1,1);
+  dirty=true;
+  updatePaletteItem(pi);
+  updateProgress();
+  if(P.filledCount===P.total) win();
 }
 
 function floodFill(c0,r0,pi){
@@ -754,7 +797,20 @@ function setupEvents(){
     pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
     if(pointers.size===1){
       if(e.button===2||e.button===1){ panning=true; panStart={x:e.clientX,y:e.clientY,tx:view.tx,ty:view.ty}; }
-      else{ painting=true; lastPaint=-1; setToolColor(); armTool(true); moveToolCursor(e); paintAt(e); }
+      else{
+        painting=true; lastPaint=-1; setToolColor(); moveToolCursor(e);
+        const cell=cellFromEvent(e);
+        if(bucketOn){
+          // 油漆筒開啟：按住即進入「填滿」狀態
+          armTool(true); paintAt(e);
+        }else if(cell&&P.selected>=0&&!P.filled[cell.r*P.cols+cell.c]&&P.indexMap[cell.r*P.cols+cell.c]===P.selected){
+          // 經典刷子（關閉）：按下的那一格正是選取編號 → 直接單填
+          doPaint(cell,cell.r*P.cols+cell.c);
+        }else{
+          // 其他情況視為起手拖曳 → 進入平移，不會誤閃紅、也不會卡住無法移動畫面
+          panning=true; panStart={x:e.clientX,y:e.clientY,tx:view.tx,ty:view.ty};
+        }
+      }
     }else if(pointers.size===2){
       painting=false; panning=false; disarmTool();
       const [a,b]=[...pointers.values()];
@@ -766,6 +822,11 @@ function setupEvents(){
   });
 
   stage.addEventListener('pointermove',e=>{
+    // 油漆筒「關閉」＝經典刷子：在畫布上掃過（含滑鼠懸停／手指拖曳）掃到哪一格就只填那一格
+    if(!painting&&!panning&&!pinch&&pointers.size===0){
+      if(!bucketOn&&P&&P.selected>=0&&e.pointerType!=='touch'){ paintAt(e); }
+      return;
+    }
     if(!pointers.has(e.pointerId)) return;
     pointers.get(e.pointerId).x=e.clientX; pointers.get(e.pointerId).y=e.clientY;
     if(pinch&&pointers.size>=2){
@@ -785,6 +846,8 @@ function setupEvents(){
       applyView();
     }else if(painting&&pointers.size===1){
       moveToolCursor(e);
+      // 刷子模式（油漆筒關閉）：拖動時每一格都算新目標，掃到哪一格填哪一格
+      if(!bucketOn) lastPaint=-1;
       paintAt(e);
     }
   });
@@ -795,7 +858,8 @@ function setupEvents(){
     pointers.delete(e.pointerId);
     if(pointers.size<2) pinch=null;
     if(pointers.size===0){
-      painting=false; panning=false; panStart=null; disarmTool();
+      painting=false; panning=false; panStart=null;
+      disarmTool(); // 依開關狀態還原：油漆筒開啟時仍保持「沾色」外觀，關閉時回到經典刷子
       if(wasPainting&&e.pointerType!=='mouse'){
         const now=Date.now();
         if(now-lastTap.t<320&&Math.hypot(e.clientX-lastTap.x,e.clientY-lastTap.y)<30) resetView();
