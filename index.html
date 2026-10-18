@@ -413,7 +413,19 @@ function startGame(){
     catch(err){ hideOverlay('overlay-loading'); showToast('生成失敗：圖片太大或記憶體不足'); console.error(err); return; }
     hideOverlay('overlay-loading');
     showScreen('screen-game');
-    requestAnimationFrame(()=>{ resizeMainCanvas(); resetView(); startTimer(); });
+    // 強制先完成一次版面配置，確保容器已取得實際尺寸後再建立畫布；
+    // 若容器尺寸仍為 0（如進入全螢幕／填滿畫面過程中），延後重試，避免畫布變成 0×0 導致黑屏。
+    const initCanvasWhenReady=(tries=0)=>{
+      const el=$('canvas-container');
+      if(el && el.clientWidth>0 && el.clientHeight>0){
+        resizeMainCanvas(); resetView(); startTimer();
+      }else if(tries<120){
+        requestAnimationFrame(()=>initCanvasWhenReady(tries+1));
+      }else{
+        resizeMainCanvas(); resetView(); startTimer();
+      }
+    };
+    requestAnimationFrame(()=>initCanvasWhenReady());
     showToast('放大畫布即可看到每格編號 🔍');
   },60);
 }
@@ -537,26 +549,36 @@ function selectNumFromInput(){
 
 /* 油漆筒只在「按壓中」是填滿狀態；一旦放開或滑鼠／手指離開按鈕，立刻回到經典刷子 */
 function disarmTool(){ armTool(false); }
-toolBtn.addEventListener('pointerdown',()=>{ setToolColor(); armTool(true); });
-['pointerup','pointercancel','pointerleave'].forEach(ev=>toolBtn.addEventListener(ev,disarmTool));
-window.addEventListener('pointerup',disarmTool);
-window.addEventListener('blur',disarmTool);
-toolBtn.addEventListener('click',()=>showToast(P?'🖌️ 油漆筒：在畫布上按住拖動，即以選取顏色填滿附近區域':'🖌️ 油漆筒：開始挑戰後即可使用'));
+function bindToolBtn(){
+  toolBtn.addEventListener('pointerdown',()=>{ setToolColor(); armTool(true); });
+  ['pointerup','pointercancel','pointerleave'].forEach(ev=>toolBtn.addEventListener(ev,disarmTool));
+  window.addEventListener('pointerup',disarmTool);
+  window.addEventListener('blur',disarmTool);
+  toolBtn.addEventListener('click',()=>showToast(P?'🖌️ 油漆筒：在畫布上按住拖動，即以選取顏色填滿附近區域':'🖌️ 油漆筒：開始挑戰後即可使用'));
+}
 
 /* ================================================================
    RENDER — screen canvas + viewport culling
    ================================================================ */
 let stage=null, cvs=null, ctx=null, dpr=1;
+const toolBtn=$('tool-btn'), toolCursor=$('tool-cursor');
+bindToolBtn();
 function resizeMainCanvas(){
   stage=$('canvas-container'); cvs=$('main-canvas'); ctx=cvs.getContext('2d');
   dpr=window.devicePixelRatio||1;
-  cvs.width=Math.round(stage.clientWidth*dpr);
-  cvs.height=Math.round(stage.clientHeight*dpr);
+  // 防黑屏：容器尺寸必須 > 0，且畫布總像素不超過瀏覽器上限（約 16,777,216 px），
+  // 否則在填滿畫面／全螢幕或高 DPR 裝置上會建立無效畫布，導致整片黑屏。
+  const w=stage.clientWidth||0, h=stage.clientHeight||0;
+  const MAX_TOTAL_PX=16000000; // 留安全餘量，低於 Safari/Chrome 的 ~16.7M 上限
+  let bw=Math.max(1,Math.round(w*dpr)), bh=Math.max(1,Math.round(h*dpr));
+  const total=bw*bh;
+  if(total>MAX_TOTAL_PX){ const k=Math.sqrt(MAX_TOTAL_PX/total); bw=Math.max(1,Math.floor(bw*k)); bh=Math.max(1,Math.floor(bh*k)); }
+  cvs.width=bw; cvs.height=bh;
   dirty=true;
 }
 function metrics(){
-  const W=stage.clientWidth,H=stage.clientHeight;
-  const base=Math.min(W/P.cols,H/P.rows);
+  const W=stage?stage.clientWidth:0, H=stage?stage.clientHeight:0;
+  const base=(P&&W>0&&H>0)?Math.min(W/P.cols,H/P.rows):1;
   const cell=base*view.scale;
   const cw=P.cols*cell,ch=P.rows*cell;
   return {W,H,base,cell,cw,ch,dx:(W-cw)/2+view.tx,dy:(H-ch)/2+view.ty};
@@ -574,6 +596,9 @@ function resetView(){ view.scale=1; view.tx=0; view.ty=0; applyView(); }
 function render(){
   if(!P||!ctx) return;
   const m=metrics();
+  // 防黑屏：填滿畫面／全螢幕切換過程中容器可能暫時為 0 尺寸，
+  // 此時跳過繪製並保留 dirty，等尺寸恢復後自動重繪。
+  if(m.W<=0||m.H<=0){ dirty=true; return; }
   ctx.setTransform(dpr,0,0,dpr,0,0);
   ctx.fillStyle='#0B0F15'; ctx.fillRect(0,0,m.W,m.H);
 
@@ -639,7 +664,6 @@ const pointers=new Map();
 
 /* 未按壓：經典刷子外觀；按壓中：油漆筒填滿選取顏色，並填滿附近同色區域 */
 let toolArmed=false;
-const toolBtn=$('tool-btn'), toolCursor=$('tool-cursor');
 function setToolColor(){
   const e=(P&&P.selected>=0)?P.palette[P.selected]:null;
   document.body.style.setProperty('--tool-color',e?`rgb(${e.r},${e.g},${e.b})`:'#5EA0F2');
@@ -797,6 +821,17 @@ function setupEvents(){
 
   window.addEventListener('resize',()=>{ if(P) resizeMainCanvas(); });
   window.addEventListener('orientationchange',()=>setTimeout(()=>{ if(P) resizeMainCanvas(); },300));
+
+  // 填滿畫面／全螢幕切換時，重新校正畫布尺寸與視角，避免黑屏或畫面偏移
+  const onViewportChange=()=>{ if(P){ resizeMainCanvas(); applyView(); } };
+  document.addEventListener('fullscreenchange',onViewportChange);
+  document.addEventListener('webkitfullscreenchange',onViewportChange);
+  if(window.visualViewport){
+    window.visualViewport.addEventListener('resize',onViewportChange);
+    window.visualViewport.addEventListener('scroll',onViewportChange);
+  }
+  // iOS Safari：旋轉鎖定／進入全螢幕時 resize 事件可能延遲觸發
+  window.addEventListener('load',()=>{ if(P) resizeMainCanvas(); });
 }
 
 /* ================================================================
