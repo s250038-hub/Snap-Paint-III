@@ -136,6 +136,21 @@ body::before{
 #num-input{flex:1.8;padding:10px;border:1px solid var(--line);border-radius:10px;background:#0F1520;color:var(--text);text-align:center;font-family:var(--mono);font-size:1.2rem;font-weight:700;letter-spacing:3px;outline:none}
 #num-input:focus{border-color:var(--accent)}
 
+/* ---------- 油漆筒（製作油漆筒按鈕）圖標：經典刷子，僅按壓時填滿選取顏色 ---------- */
+#tool-btn{flex:0 0 auto;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;padding:6px 12px}
+#tool-btn .paint-roller{width:26px;height:26px;display:block}
+#tool-btn .tool-label{font-size:.66rem;font-weight:700;color:var(--muted);letter-spacing:1px;line-height:1;white-space:nowrap}
+/* 未按壓＝經典刷子：刷毛為灰白條紋 */
+.pr-head{fill:url(#rollerStripes)}
+/* 按壓中：油漆筒沾滿「選取顏色」，並顯示跟手的刷子游標 */
+body.tool-armed #canvas-container{cursor:none}
+body.tool-armed .pr-head{fill:var(--tool-color,#5EA0F2)}
+body.tool-armed #tool-cursor{display:block}
+#tool-cursor{position:absolute;left:0;top:0;width:46px;height:46px;margin:-30px 0 0 -6px;pointer-events:none;z-index:5;display:none}
+
+/* ---------- 共用 SVG 定義（刷子條紋）---------- */
+#svg-defs{position:absolute;width:0;height:0;overflow:hidden}
+
 /* ---------- gallery ---------- */
 #screen-gallery{background:var(--bg)}
 #gallery-grid{flex:1;overflow-y:auto;padding:15px;display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:15px;align-content:start}
@@ -193,6 +208,16 @@ body::before{
 </head>
 <body>
 
+<!-- 共用 SVG 定義：油漆筒刷毛的經典條紋 -->
+<svg id="svg-defs" aria-hidden="true" focusable="false">
+  <defs>
+    <pattern id="rollerStripes" width="3" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(15)">
+      <rect width="3" height="6" fill="#E9EEF5"/>
+      <rect width="1.2" height="6" fill="#B9C4D2"/>
+    </pattern>
+  </defs>
+</svg>
+
 <!-- ============ MENU ============ -->
 <div id="screen-menu" class="screen active">
   <div class="logo-strip"><i></i><i></i><i></i><i></i><i></i></div>
@@ -240,11 +265,26 @@ body::before{
 
   <div id="canvas-container">
     <canvas id="main-canvas"></canvas>
+    <!-- 油漆筒游標：只在按住（按壓油漆筒）時顯示 -->
+    <svg id="tool-cursor" viewBox="0 0 24 24" aria-hidden="true">
+      <rect class="pr-head" x="2.5" y="2.5" width="13" height="6" rx="2.4"/>
+      <path d="M15.5 5.5h2.2a2 2 0 0 1 2 2v2.6a2 2 0 0 1-2 2h-7.8a2 2 0 0 0-2 2v.6" fill="none" stroke="#E9EEF5" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+      <rect x="6.6" y="16" width="3.4" height="5.6" rx="1.5" fill="#E9EEF5"/>
+    </svg>
   </div>
 
   <div id="bottom-panel">
     <div id="palette-container"></div>
     <div id="toolbar">
+      <button class="tbtn" id="tool-btn" type="button" aria-pressed="false" title="油漆筒：按住畫布即以選取顏色填滿附近區域；未按壓時為經典刷子">
+        <svg class="paint-roller" viewBox="0 0 24 24" aria-hidden="true">
+          <!-- 刷毛／油漆筒外殼：未按壓＝經典條紋刷子，按壓時由 .pr-head 沾上選取顏色 -->
+          <rect class="pr-head" x="2.5" y="2.5" width="13" height="6" rx="2.4"/>
+          <path d="M15.5 5.5h2.2a2 2 0 0 1 2 2v2.6a2 2 0 0 1-2 2h-7.8a2 2 0 0 0-2 2v.6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+          <rect x="6.6" y="16" width="3.4" height="5.6" rx="1.5" fill="currentColor"/>
+        </svg>
+        <span class="tool-label">油漆筒</span>
+      </button>
       <button class="tbtn" id="reset-btn" onclick="confirmReset()">↺ 重置</button>
       <input type="text" id="num-input" placeholder="編號" maxlength="4" inputmode="numeric" autocomplete="off">
       <button class="tbtn primary" onclick="selectNumFromInput()">選擇</button>
@@ -495,6 +535,14 @@ function selectNumFromInput(){
   select(pi,true);
 }
 
+/* 油漆筒只在「按壓中」是填滿狀態；一旦放開或滑鼠／手指離開按鈕，立刻回到經典刷子 */
+function disarmTool(){ armTool(false); }
+toolBtn.addEventListener('pointerdown',()=>{ setToolColor(); armTool(true); });
+['pointerup','pointercancel','pointerleave'].forEach(ev=>toolBtn.addEventListener(ev,disarmTool));
+window.addEventListener('pointerup',disarmTool);
+window.addEventListener('blur',disarmTool);
+toolBtn.addEventListener('click',()=>showToast(P?'🖌️ 油漆筒：在畫布上按住拖動，即以選取顏色填滿附近區域':'🖌️ 油漆筒：開始挑戰後即可使用'));
+
 /* ================================================================
    RENDER — screen canvas + viewport culling
    ================================================================ */
@@ -585,8 +633,28 @@ function render(){
 /* ================================================================
    INTERACTION — paint / pan / pinch / wheel
    ================================================================ */
+/* ---------- 油漆筒（製作油漆筒按鈕） ---------- */
 let painting=false, panning=false, pinch=null, panStart=null, lastPaint=-1, lastTap={t:0,x:0,y:0};
 const pointers=new Map();
+
+/* 未按壓：經典刷子外觀；按壓中：油漆筒填滿選取顏色，並填滿附近同色區域 */
+let toolArmed=false;
+const toolBtn=$('tool-btn'), toolCursor=$('tool-cursor');
+function setToolColor(){
+  const e=(P&&P.selected>=0)?P.palette[P.selected]:null;
+  document.body.style.setProperty('--tool-color',e?`rgb(${e.r},${e.g},${e.b})`:'#5EA0F2');
+}
+function armTool(on){
+  if(toolArmed===on) return;
+  toolArmed=on;
+  document.body.classList.toggle('tool-armed',on);
+  toolBtn.setAttribute('aria-pressed',on?'true':'false');
+}
+function moveToolCursor(e){
+  const rect=stage.getBoundingClientRect();
+  toolCursor.style.left=(e.clientX-rect.left)+'px';
+  toolCursor.style.top=(e.clientY-rect.top)+'px';
+}
 
 function cellFromEvent(e){
   const rect=stage.getBoundingClientRect();
@@ -662,9 +730,9 @@ function setupEvents(){
     pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
     if(pointers.size===1){
       if(e.button===2||e.button===1){ panning=true; panStart={x:e.clientX,y:e.clientY,tx:view.tx,ty:view.ty}; }
-      else{ painting=true; lastPaint=-1; paintAt(e); }
+      else{ painting=true; lastPaint=-1; setToolColor(); armTool(true); moveToolCursor(e); paintAt(e); }
     }else if(pointers.size===2){
-      painting=false; panning=false;
+      painting=false; panning=false; disarmTool();
       const [a,b]=[...pointers.values()];
       const rect=stage.getBoundingClientRect();
       const mid={x:(a.x+b.x)/2-rect.left,y:(a.y+b.y)/2-rect.top};
@@ -692,6 +760,7 @@ function setupEvents(){
       view.ty=panStart.ty+(e.clientY-panStart.y);
       applyView();
     }else if(painting&&pointers.size===1){
+      moveToolCursor(e);
       paintAt(e);
     }
   });
@@ -702,7 +771,7 @@ function setupEvents(){
     pointers.delete(e.pointerId);
     if(pointers.size<2) pinch=null;
     if(pointers.size===0){
-      painting=false; panning=false; panStart=null;
+      painting=false; panning=false; panStart=null; disarmTool();
       if(wasPainting&&e.pointerType!=='mouse'){
         const now=Date.now();
         if(now-lastTap.t<320&&Math.hypot(e.clientX-lastTap.x,e.clientY-lastTap.y)<30) resetView();
