@@ -542,8 +542,20 @@ function select(pi,scroll){
   e.el.classList.add('selected'); P.selectedEl=e.el;
   // ★ 平滑捲動僅用於「使用者主動選色」且元素曾進入視口；
   //   自動接色／重置等情境改用即時定位，避免對數千離屏元素做平滑動畫造成卡頓
-  if(scroll && (!palIO || e.el._vis)) e.el.scrollIntoView({behavior:'smooth',inline:'center',block:'nearest'});
-  else if(scroll) e.el.scrollIntoView({block:'nearest',inline:'center'});
+  // ★ 修正漏洞：scrollIntoView 除了捲動調色盤本身，還會順帶把「所有祖先容器」
+  //   （包含上方畫布所在的頁面）一起捲動，導致點擊數字後畫面左移、擋住左方列的格仔。
+  //   改為手動只調整 #palette-container 的横向捲動位置，絕不觸碰任何祖先捲動／頁面捲動。
+  if(scroll) scrollPaletteIntoView(e.el, !!(palIO && !e.el._vis));
+}
+// 只在調色盤自己的捲動容器內水平置中該項目；block 完全不設（等同 nearest），
+// 因此不會垂直捲動頁面，也不會讓上方畫布位移。
+function scrollPaletteIntoView(el,instant){
+  const box=$('palette-container');
+  if(!box||!el) return;
+  const target=Math.max(0, el.offsetLeft - (box.clientWidth - el.offsetWidth)/2);
+  if(instant) box.scrollLeft=target;
+  else if(box.scrollTo) box.scrollTo({left:target,behavior:'smooth'});
+  else box.scrollLeft=target;
 }
 function autoAdvance(from){
   const n=P.palette.length;
