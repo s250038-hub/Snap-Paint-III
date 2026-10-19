@@ -339,6 +339,9 @@ let chosenPct = 100;
 let P = null;
 const view = { scale:1, tx:0, ty:0 };
 let dirty = true;
+// ★ 編號尚未全部補齊的旗標：render() 結尾若為 true，會保留 dirty 讓後續幀繼續繪製編號，
+//   直到所有可見格子的編號都畫完為止（填色畫面則在第一幀就立即顯示，不受影響）。
+let numbersIncomplete = false;
 // ★ 修正漏洞：flashes 採「固定物件＋原地清空」，避免多處重新賦值造成指向不同陣列、緩存永不釋放
 const flashes = { items: [], length: 0 };
 // ★ 防呆：刷錯色時，同一格在短時間內不重複閃紅（放大後快速掃過整片錯色不會瘋狂閃爍）；
@@ -491,6 +494,7 @@ function buildPuzzle(f){
       savedThisRound:false,startTs:Date.now(),elapsed:0 };
   // ★ 刷錯色冷卻機制：新畫布一律清空閃爍緩存與防呆紀錄（原地清空，避免重新賦值不同步）
   flashes.items.length=0; flashes.length=0; lastFlash.clear();
+  pendingDirtyRects=null; numbersIncomplete=false; // ★ 新畫布重置每幀合併同步狀態
   renderPalette();
   updateProgress();
   $('num-input').value='';
@@ -628,6 +632,8 @@ function render(){
   // 防黑屏：填滿畫面／全螢幕切換過程中容器可能暫時為 0 尺寸，
   // 此時跳過繪製並保留 dirty，等尺寸恢復後自動重繪。
   if(m.W<=0||m.H<=0){ dirty=true; return; }
+  // ★ 每幀一次、合併同步所有待更新的工作畫布區域（取代舊的逐次 putImageData）
+  syncWorkCanvas();
   ctx.setTransform(dpr,0,0,dpr,0,0);
   ctx.fillStyle='#0B0F15'; ctx.fillRect(0,0,m.W,m.H);
 
@@ -656,9 +662,20 @@ function render(){
     const size=[0, m.cell*.58, m.cell*.58, m.cell*.5, m.cell*.375];
     const fontOf=l=>`700 ${size[l].toFixed(1)}px ${NUM_FONT}`;
     let curLen=0;
-    for(let r=r0;r<r1;r++){
+    // ★ 最高難度延遲元凶之一：舊寫法對視口內「所有未填格」（動輒數十萬格）逐格做完整
+    //   strokeText+fillText——單幀可耗時數百毫秒，油漆筒一次填色後接下來好幾秒畫面都在重畫編號，
+    //   看起來就是嚴重的填色延遲。新寫法：只繪製「真正在螢幕視窗內可見」的格子＋每幀編號繪製
+    //   不超過約 6ms 的時間預算（超下一幀繼續補），讓填色結果能立即顯示、編號慢慢補齊即可。
+    const vw=Math.min(m.W, window.innerWidth||m.W), vh=Math.min(m.H, window.innerHeight||m.H);
+    const vc0=clamp(Math.floor(-m.dx/m.cell),c0,c1);
+    const vc1=clamp(Math.ceil((vw-m.dx)/m.cell),c0,c1);
+    const vr0=clamp(Math.floor(-m.dy/m.cell),r0,r1);
+    const vr1=clamp(Math.ceil((vh-m.dy)/m.cell),r0,r1);
+    const budgetEnd=performance.now()+6;
+    let numBudgetHit=false, numCount=0;
+    for(let r=vr0;r<vr1;r++){
       const y=m.dy+(r+.5)*m.cell, rowI=r*P.cols;
-      for(let c=c0;c<c1;c++){
+      for(let c=vc0;c<vc1;c++){
         const i=rowI+c;
         if(P.filled[i]) continue;
         const e=P.palette[P.indexMap[i]];
@@ -669,8 +686,14 @@ function render(){
         const x=m.dx+(c+.5)*m.cell;
         ctx.strokeText(e.num,x,y);
         ctx.fillText(e.num,x,y);
+        // ★ 每 64 格檢查一次時間預算：超時就中斷，下一幀從頭補齊（填色畫面已先顯示）
+        if((++numCount&63)===0&&performance.now()>budgetEnd){ numBudgetHit=true; r=vr1; break; }
       }
     }
+    // 若視窗外仍有未填格、或本幀被時間預算截斷，保持 dirty 讓後續幀繼續補畫編號
+    numbersIncomplete=numBudgetHit||vc1<c1||vr1<r1;
+  }else{
+    numbersIncomplete=false;
   }
 
   const now=performance.now();
@@ -689,6 +712,8 @@ function render(){
     flashes.items.length=w; flashes.length=w;
     if(flashes.length||expired) dirty=true;
   }
+  // ★ 編號被時間預算截斷尚未畫完 → 保留 dirty，下一幀繼續補齊（填色結果已在本幀立即顯示）
+  if(numbersIncomplete) dirty=true;
 }
 (function loop(){ if(dirty){ dirty=false; render(); } requestAnimationFrame(loop); })();
 
@@ -794,6 +819,32 @@ function doPaint(cell,i){
   return true;
 }
 
+/* ★ 最高難度（1x 完整＝數百萬格）「填色有延遲」的真正元凶：
+   舊寫法每次填色都呼叫 workCtx.putImageData()——在 1920×1920 的離屏畫布上，
+   Chromium/Safari 會把整張畫布標記為髒區，使得下一幀 render() 裡的 drawImage(workCanvas)
+   必須重傳／重建整張數百萬像素的紋理，單幀成本可達數十～數百毫秒；
+   再加上刷子拖曳時每一幀都觸發一次，視覺上就是嚴重的卡頓與「按了才慢慢填起來」的假性延遲。
+   新寫法：填色只更新 workImg（純記憶體，微秒級），並設定 pendingDirtyRects，
+   由 render() 每幀把「同一張 workImg」一次性 putImageData 回工作畫布（合併髒矩形、每幀最多一次），
+   徹底消除逐次 putImageData 造成的整幅紋理重傳。 */
+let pendingDirtyRects=null; // null = 尚無待同步；[] = 已排定但尚未累積任何矩形
+function markWorkDirty(x,y,w,h){
+  if(!pendingDirtyRects) return; // 本幀稍後會被全量同步，不必再記錄
+  pendingDirtyRects.push(x,y,w,h);
+}
+function syncWorkCanvas(){
+  if(pendingDirtyRects===null) return;
+  if(pendingDirtyRects.length){
+    const R=pendingDirtyRects;
+    for(let k=0;k<R.length;k+=4){
+      P.workCtx.putImageData(P.workImg,R[k],R[k+1],R[k],R[k+1],R[k+2],R[k+3]);
+    }
+  }else{
+    P.workCtx.putImageData(P.workImg,0,0); // 安全兜底（重置等情境）
+  }
+  pendingDirtyRects=null;
+}
+
 /* 單格塗抹：只上色的當前這一格，不做連通區塊搜尋 */
 function paintSingleCell(c,r){
   const {cols,indexMap,filled,palette,workImg}=P;
@@ -802,7 +853,7 @@ function paintSingleCell(c,r){
   const o=(r*cols+c)*4; d[o]=e.r; d[o+1]=e.g; d[o+2]=e.b;
   P.filledCount++;
   e.remaining--;
-  P.workCtx.putImageData(workImg,c,r,1,1);
+  markWorkDirty(c,r,1,1);
   dirty=true;
   updatePaletteItem(pi);
   updateProgress();
@@ -835,7 +886,13 @@ function floodFill(c0,r0,pi){
   }
   P.filledCount+=count;
   e.remaining-=count;
-  P.workCtx.putImageData(workImg,0,0,minX,minY,maxX-minX+1,maxY-minY+1);
+  // ★ 修正漏洞：大區域油漆筒的邊界可能超出畫布（如 cols 為 2 的倍數時起點掃描會越到下一列），
+  //   舊寫法直接把未鉗制的 minX/minY/w/h 丟給 putImageData，座標為負時拋出
+  //   "Overload resolution failed"，整次填色中途崩掉——表現出來就是「油漆筒沒反應／要再按一次才有」。
+  //   同時改用每幀合併同步（見上方說明），不再逐次 putImageData 造成卡頓。
+  const sx=clamp(minX,0,cols-1), sy=clamp(minY,0,rows-1);
+  const sw=clamp(maxX,0,cols-1)-sx+1, sh=clamp(maxY,0,rows-1)-sy+1;
+  markWorkDirty(sx,sy,sw,sh);
   dirty=true;
   updatePaletteItem(pi);
   updateProgress();
