@@ -141,15 +141,17 @@ body::before{
 #tool-btn .paint-roller{width:26px;height:26px;display:block}
 #tool-btn .tool-label{font-size:.66rem;font-weight:700;color:var(--muted);letter-spacing:1px;line-height:1;white-space:nowrap}
 /* 未按壓＝經典刷子：刷毛為灰白條紋 */
-.pr-head{fill:url(#rollerStripes)}
-/* 按壓中：油漆筒沾滿「選取顏色」，並顯示跟手的刷子游標 */
-body.tool-armed #canvas-container{cursor:none}
-body.tool-armed .pr-head{fill:var(--tool-color,#5EA0F2)}
-body.tool-armed #tool-cursor{display:block}
+.pr-head{fill:#E9EEF5}
+/* 油漆筒開啟／按壓中：刷子頭部沾上「選取顏色」（純 CSS 條紋，不引用外部 SVG defs，避免 Safari 破圖） */
+.pr-stripes{fill:#B9C4D2}
+body.bucket-on .pr-head,body.tool-armed .pr-head{fill:var(--tool-color,#5EA0F2)}
+body.bucket-on .pr-stripes,body.tool-armed .pr-stripes{fill:rgba(255,255,255,.45)}
+/* ★ 塗畫（單指拖動／滑鼠按住填色）過程中不顯示任何工具圖示／自訂游標，只留系統十字準線 */
+body.painting #tool-cursor{display:none!important}
+body.painting #canvas-container{cursor:crosshair!important}
 #tool-cursor{position:absolute;left:0;top:0;width:46px;height:46px;margin:-30px 0 0 -6px;pointer-events:none;z-index:5;display:none}
-
-/* ---------- 共用 SVG 定義（刷子條紋）---------- */
-#svg-defs{position:absolute;width:0;height:0;overflow:hidden}
+body.bucket-on:not(.painting) #canvas-container{cursor:none}
+body.bucket-on:not(.painting) #tool-cursor,body.tool-armed:not(.painting) #tool-cursor{display:block}
 
 /* ---------- gallery ---------- */
 #screen-gallery{background:var(--bg)}
@@ -208,16 +210,6 @@ body.tool-armed #tool-cursor{display:block}
 </head>
 <body>
 
-<!-- 共用 SVG 定義：油漆筒刷毛的經典條紋 -->
-<svg id="svg-defs" aria-hidden="true" focusable="false">
-  <defs>
-    <pattern id="rollerStripes" width="3" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(15)">
-      <rect width="3" height="6" fill="#E9EEF5"/>
-      <rect width="1.2" height="6" fill="#B9C4D2"/>
-    </pattern>
-  </defs>
-</svg>
-
 <!-- ============ MENU ============ -->
 <div id="screen-menu" class="screen active">
   <div class="logo-strip"><i></i><i></i><i></i><i></i><i></i></div>
@@ -265,9 +257,12 @@ body.tool-armed #tool-cursor{display:block}
 
   <div id="canvas-container">
     <canvas id="main-canvas"></canvas>
-    <!-- 油漆筒游標：只在按住（按壓油漆筒）時顯示 -->
+    <!-- 油漆筒游標：僅在油漆筒開啟且「未按住塗畫」時顯示；塗畫過程中一律隱藏（見 body.painting 規則） -->
     <svg id="tool-cursor" viewBox="0 0 24 24" aria-hidden="true">
       <rect class="pr-head" x="2.5" y="2.5" width="13" height="6" rx="2.4"/>
+      <rect class="pr-stripes" x="4.2" y="2.5" width="1.6" height="6"/>
+      <rect class="pr-stripes" x="8.2" y="2.5" width="1.6" height="6"/>
+      <rect class="pr-stripes" x="12.2" y="2.5" width="1.4" height="6"/>
       <path d="M15.5 5.5h2.2a2 2 0 0 1 2 2v2.6a2 2 0 0 1-2 2h-7.8a2 2 0 0 0-2 2v.6" fill="none" stroke="#E9EEF5" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
       <rect x="6.6" y="16" width="3.4" height="5.6" rx="1.5" fill="#E9EEF5"/>
     </svg>
@@ -280,6 +275,9 @@ body.tool-armed #tool-cursor{display:block}
         <svg class="paint-roller" viewBox="0 0 24 24" aria-hidden="true">
           <!-- 刷毛／油漆筒外殼：未按壓＝經典條紋刷子，按壓時由 .pr-head 沾上選取顏色 -->
           <rect class="pr-head" x="2.5" y="2.5" width="13" height="6" rx="2.4"/>
+          <rect class="pr-stripes" x="4.2" y="2.5" width="1.6" height="6"/>
+          <rect class="pr-stripes" x="8.2" y="2.5" width="1.6" height="6"/>
+          <rect class="pr-stripes" x="12.2" y="2.5" width="1.4" height="6"/>
           <path d="M15.5 5.5h2.2a2 2 0 0 1 2 2v2.6a2 2 0 0 1-2 2h-7.8a2 2 0 0 0-2 2v.6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
           <rect x="6.6" y="16" width="3.4" height="5.6" rx="1.5" fill="currentColor"/>
         </svg>
@@ -340,7 +338,12 @@ let srcImg = null;
 let chosenPct = 100;
 let P = null;
 const view = { scale:1, tx:0, ty:0 };
-let dirty = true, flashes = [];
+let dirty = true;
+// ★ 修正漏洞：flashes 採「固定物件＋原地清空」，避免多處重新賦值造成指向不同陣列、緩存永不釋放
+const flashes = { items: [], length: 0 };
+// ★ 防呆：刷錯色時，同一格在短時間內不重複閃紅（放大後快速掃過整片錯色不會瘋狂閃爍）；
+//   但不同格仍會各自提示一次，保留「故意刷錯再刷對」的確認回饋。宣告在最頂端，供各區塊共用。
+const lastFlash = new Map();
 
 const $ = id => document.getElementById(id);
 const clamp = (v,a,b)=>Math.min(Math.max(v,a),b);
@@ -486,15 +489,23 @@ function buildPuzzle(f){
       grayData:grayImg.data,
       selected:-1,selectedEl:null,filledCount:0,
       savedThisRound:false,startTs:Date.now(),elapsed:0 };
-  flashes=[];
+  // ★ 刷錯色冷卻機制：新畫布一律清空閃爍緩存與防呆紀錄（原地清空，避免重新賦值不同步）
+  flashes.items.length=0; flashes.length=0; lastFlash.clear();
   renderPalette();
   updateProgress();
   $('num-input').value='';
 }
 
 /* ---------------- palette DOM ---------------- */
+// ★ 防呆：極舊瀏覽器／WebView 無 IntersectionObserver 時降級為「一律平滑捲動」，避免腳本崩潰
+const palIO=('IntersectionObserver' in window)?new IntersectionObserver(es=>{
+  es.forEach(en=>{ if(en.isIntersecting) en.target._vis=true; });
+},{root:$('palette-container'),threshold:0.6}):null;
 function renderPalette(){
-  const box=$('palette-container'); box.innerHTML='';
+  const box=$('palette-container');
+  // ★ 重建前先釋放舊節點，避免離屏畫布（workCanvas）被殘留 DOM 引用而無法回收（記憶體漏洞）
+  for(const e of P.palette){ if(e.el&&palIO) palIO.unobserve(e.el); e.el=null; e.fillEl=null; }
+  box.innerHTML='';
   const frag=document.createDocumentFragment();
   P.palette.forEach((e,pi)=>{
     const item=document.createElement('div');
@@ -510,6 +521,9 @@ function renderPalette(){
     frag.appendChild(item);
   });
   box.appendChild(frag);
+  // ★ 大型調色盤（最多 4096 色）只在進入視口後才啟用平滑捲動定位，
+  //   避免對數千個離屏元素呼叫 scrollIntoView 造成卡頓／當機
+  if(palIO) for(const e of P.palette) palIO.observe(e.el);
 }
 function updatePaletteItem(pi){
   const e=P.palette[pi];
@@ -526,7 +540,10 @@ function select(pi,scroll){
   $('num-input').value=e.num;
   if(P.selectedEl) P.selectedEl.classList.remove('selected');
   e.el.classList.add('selected'); P.selectedEl=e.el;
-  if(scroll) e.el.scrollIntoView({behavior:'smooth',inline:'center',block:'nearest'});
+  // ★ 平滑捲動僅用於「使用者主動選色」且元素曾進入視口；
+  //   自動接色／重置等情境改用即時定位，避免對數千離屏元素做平滑動畫造成卡頓
+  if(scroll && (!palIO || e.el._vis)) e.el.scrollIntoView({behavior:'smooth',inline:'center',block:'nearest'});
+  else if(scroll) e.el.scrollIntoView({block:'nearest',inline:'center'});
 }
 function autoAdvance(from){
   const n=P.palette.length;
@@ -561,7 +578,7 @@ let stage=null, cvs=null, ctx=null, dpr=1;
 const toolBtn=$('tool-btn'), toolCursor=$('tool-cursor');
 // 開關狀態下游標／按鈕顏色需跟著選取色更新（油漆筒開啟時）
 const _origSelect=select;
-select=function(pi,scroll){ _origSelect(pi,scroll); if(bucketOn) setToolColor(); };
+select=function(pi,scroll){ _origSelect(pi,scroll); setToolColor(); }; // ★ 修正漏洞：游標／刷子沾色隨時跟隨選取顏色（原本關閉油漆筒後改色，颜色不再更新）
 bindToolBtn();
 function resizeMainCanvas(){
   stage=$('canvas-container'); cvs=$('main-canvas'); ctx=cvs.getContext('2d');
@@ -645,13 +662,21 @@ function render(){
   }
 
   const now=performance.now();
-  flashes=flashes.filter(f=>now-f.t<320);
-  for(const f of flashes){
-    const a=1-(now-f.t)/320;
-    ctx.fillStyle=`rgba(255,95,84,${(.55*a).toFixed(3)})`;
-    ctx.fillRect(m.dx+f.c*m.cell,m.dy+f.r*m.cell,m.cell,m.cell);
+  // ★ 修正「放大時刷錯色只閃一下、看不到的問題」：
+  //   改為「先繪製、後原地移除」，確保每一幀閃爍都完整顯示到時間結束；
+  //   並用固定物件 flashes.items 原地清空，避免重新賦值造成不同步的緩存漏洞。
+  if(flashes.length){
+    let w=0, expired=false;
+    for(let k=0;k<flashes.length;k++){
+      const f=flashes.items[k], a=1-(now-f.t)/320;
+      if(a<=0){ expired=true; continue; }
+      ctx.fillStyle=`rgba(255,95,84,${(.55*a).toFixed(3)})`;
+      ctx.fillRect(m.dx+f.c*m.cell,m.dy+f.r*m.cell,m.cell,m.cell);
+      flashes.items[w++]=f; // 未過期的原地保留（維持時間順序）
+    }
+    flashes.items.length=w; flashes.length=w;
+    if(flashes.length||expired) dirty=true;
   }
-  if(flashes.length) dirty=true;
 }
 (function loop(){ if(dirty){ dirty=false; render(); } requestAnimationFrame(loop); })();
 
@@ -660,6 +685,9 @@ function render(){
    ================================================================ */
 /* ---------- 油漆筒（製作油漆筒按鈕） ---------- */
 let painting=false, panning=false, pinch=null, panStart=null, lastPaint=-1, lastTap={t:0,x:0,y:0};
+// ★ 修正漏洞：滑鼠按下「錯色格」後，本次按住期間鎖住刷子自動補填（gestureLocked），
+//   必須放開重新按下才算第二次嘗試；新按下（pointerdown）時一律重置此旗標。
+let gestureLocked=false;
 const pointers=new Map();
 
 /* 油漆筒「開啟」＝切換式開關：開啟時單指觸碰會自動填滿所有相鄰的同編號區域；
@@ -673,22 +701,27 @@ function setToolColor(){
 function updateBucketUI(){
   document.body.classList.toggle('bucket-on',bucketOn);
   toolBtn.classList.toggle('active',bucketOn);
-  toolBtn.setAttribute('aria-pressed',bucketOn?'true':'false');
+  toolBtn.setAttribute('aria-pressed',(bucketOn||toolArmed)?'true':'false'); // ★ 修正：開關切換時同步無障礙狀態，且不被按壓狀態覆寫
   const lbl=$('tool-mode'); if(lbl) lbl.textContent=bucketOn?'油漆筒':'刷子';
 }
 function toggleBucket(){
   bucketOn=!bucketOn;
-  if(bucketOn) setToolColor(); // 開啟時游標／刷子頭部立即沾上選取顏色
+  setToolColor(); // ★ 修正漏洞：無論開啟或關閉，游標／刷子頭部顏色都立即跟隨選取色
   updateBucketUI();
   showToast(bucketOn?'🪣 油漆筒已開啟：單指觸碰自動填滿所有附近的同編號區域（雙指仍可移動／縮放）':'🖌️ 油漆筒已關閉：單指掃到哪一格就只填那一格（雙指仍可移動／縮放）');
 }
-/* 刷子游標：油漆筒「開啟」或按住拖動中，顯示沾滿選取顏色的油漆筒；關閉且未按住時維持系統游標 */
+/* 刷子游標：油漆筒「開啟」且未按住塗畫時，顯示沾滿選取顏色的油漆筒；
+   ★ 一旦開始塗畫（painting=true）立即隱藏圖示並還原系統十字準線，避免圖示擋住格線與編號 */
 function armTool(on){
   if(toolArmed===on) return;
   toolArmed=on;
+  // ★ 修正漏洞：塗畫進行中一律不得浮現工具圖示——若因按壓中途放開滑鼠、但手指／按鈕仍在塗畫，
+  //   原本只靠 CSS :not(.painting) 遮罩，此處再補一道保險，避免圖示在 painting 狀態下被重新啟用。
+  if(on&&painting) on=false;
   document.body.classList.toggle('tool-armed',on||bucketOn);
   toolBtn.setAttribute('aria-pressed',(on||bucketOn)?'true':'false');
 }
+function setPaintingUI(on){ document.body.classList.toggle('painting',!!on); }
 function moveToolCursor(e){
   const rect=stage.getBoundingClientRect();
   toolCursor.style.left=(e.clientX-rect.left)+'px';
@@ -714,6 +747,9 @@ function paintAt(e){
 
 /* 依模式執行實際塗色（呼叫前已確認該格未填、編號相符） */
 function applyPaint(cell,i){
+  // ★ 修正漏洞：油漆筒開啟時，若連點同一錯色格企圖「閃紅後立刻補成」，一律擋下——
+  //   必須換選對顏色（或換一格）才能用油漆筒整片填滿，維持刷錯懲罰規則。
+  if(bucketOn && P.indexMap[i]!==P.selected) return;
   // 油漆筒「開啟」→ 自動填滿所有附近的同編號連通區域
   if(bucketOn){ floodFill(cell.c,cell.r,P.indexMap[i]); return; }
   // 油漆筒「關閉」→ 經典刷子：掃到哪一格就只填那一格
@@ -723,7 +759,19 @@ function applyPaint(cell,i){
 /* 對指定格子上色＋模式判斷；回傳是否實際塗了東西 */
 function doPaint(cell,i){
   if(P.filled[i]) return false;
-  if(P.indexMap[i]!==P.selected){ flashes.push({c:cell.c,r:cell.r,t:performance.now()}); dirty=true; return false; }
+  if(P.indexMap[i]!==P.selected){
+    // ★ 刷錯色：明確閃紅提示（同一格 700ms 內不重複閃，避免放大後掃過整片錯色時瘋狂閃爍）。
+    //   冷卻期內再次刷到同一格仍然失敗，必須等冷卻結束再刷一次才會成功（故意刷錯→再刷才對的玩法）。
+    const now=performance.now();
+    const t=lastFlash.get(i);
+    if(t===undefined||now-t>700){
+      lastFlash.set(i,now);
+      if(lastFlash.size>4096){ const first=lastFlash.keys().next().value; lastFlash.delete(first); }
+      if(flashes.items.length>256) flashes.items.shift(); // ★ 上限保護：極端連點也不會讓閃爍佇列無限成長
+      flashes.items.push({c:cell.c,r:cell.r,t:now}); flashes.length=flashes.items.length; dirty=true;
+    }
+    return false;
+  }
   applyPaint(cell,i);
   return true;
 }
@@ -794,7 +842,7 @@ function setupEvents(){
 
   /* ---------- 雙指手勢：開始「移動畫面／縮放」（同時取消單指填色） ---------- */
   function beginTwoFinger(){
-    painting=false; panning=false; panStart=null; disarmTool();
+    painting=false; setPaintingUI(false); panning=false; panStart=null; disarmTool();
     const [a,b]=[...pointers.values()];
     const rect=stage.getBoundingClientRect();
     const mid={x:(a.x+b.x)/2-rect.left,y:(a.y+b.y)/2-rect.top};
@@ -804,6 +852,7 @@ function setupEvents(){
 
   stage.addEventListener('pointerdown',e=>{
     if(!P) return;
+    gestureLocked=false; // ★ 新的一次按下＝新的嘗試，解除上一手的刷子鎖定
     stage.setPointerCapture(e.pointerId);
     pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
     if(pointers.size===2){
@@ -814,19 +863,39 @@ function setupEvents(){
       else if(e.pointerType==='touch'){
         // ★ 觸控單指：一律先進入填色模式（開關決定單格刷或油漆筒），拖曳不會誤移畫面；
         //   若中途變成雙指，上面的 size===2 分支會立刻取消填色改走手勢。
-        painting=true; lastPaint=-1; setToolColor(); moveToolCursor(e); armTool(true); paintAt(e);
+        //   ★ 開始塗畫即隱藏工具圖示（painting class），避免圖示擋住格線／編號
+        painting=true; setPaintingUI(true); lastPaint=-1; setToolColor(); paintAt(e);
       }
       else{
-        painting=true; lastPaint=-1; setToolColor(); moveToolCursor(e);
+        painting=true; setPaintingUI(true); lastPaint=-1; setToolColor(); moveToolCursor(e);
         const cell=cellFromEvent(e);
         if(bucketOn){
           // 油漆筒開啟：按住即進入「填滿」狀態
           armTool(true); paintAt(e);
+          // ★ 修正漏洞：按下的是「錯色格／已填格」時油漆筒不會成功，原本會直接掉進下面的
+          //   「視為平移起手」分支；改為留在油漆筒按壓狀態並鎖住本次手勢，
+          //   避免放開前被懸空掃過的刷子旁路順手補填（必須放開後重新按下才算第二次嘗試）。
+          const bi=(cell? cell.r*P.cols+cell.c : -1);
+          if(bi>=0 && (P.selected<0 || P.filled[bi] || P.indexMap[bi]!==P.selected)){
+            gestureLocked=true;
+            if(bi>=0) lastPaint=bi;
+            if(cell && !P.filled[bi] && P.selected>=0 && P.indexMap[bi]!==P.selected) doPaint(cell,bi);
+          }
         }else if(cell&&P.selected>=0&&!P.filled[cell.r*P.cols+cell.c]&&P.indexMap[cell.r*P.cols+cell.c]===P.selected){
           // 經典刷子（關閉）：按下的那一格正是選取編號 → 直接單填
           doPaint(cell,cell.r*P.cols+cell.c);
         }else{
-          // 滑鼠按到其他位置 → 視為起手拖曳平移，不會誤閃紅
+          // ★ 修正漏洞：滑鼠按到其他位置（已填的格子／錯色格／尚未選色）時，
+          //   原本會先閃紅、再因下面「brush 懸空掃過即填色」規則於 pointermove 立刻把該格補填成功，
+          //   等於完全繞過「故意刷錯→再刷一次才成功」的冷卻防呆。
+          //   解法：按下未成功塗色的那一下視為「第一次嘗試」，同時進入平移起手式，
+          //   並鎖定此手勢期間不再自動刷色（必須放開後重新按下才算第二次嘗試）。
+          const i=(cell? cell.r*P.cols+cell.c : -1);
+          if(i>=0) lastPaint=i; // 鎖住同一格，避免后續 move 對同格重複觸發
+          if(i>=0 && !P.filled[i] && P.selected>=0 && P.indexMap[i]!==P.selected){
+            doPaint(cell,i);    // 這一下只閃紅提示，不算完成
+            gestureLocked=true; // 本次按住期間不再讓 brush 順手補填
+          }
           panning=true; panStart={x:e.clientX,y:e.clientY,tx:view.tx,ty:view.ty};
         }
       }
@@ -836,6 +905,9 @@ function setupEvents(){
   stage.addEventListener('pointermove',e=>{
     // 油漆筒「關閉」＝經典刷子：滑鼠懸停在畫布上掃過時，掃到哪一格就只填那一格（觸控不適用）
     if(!painting&&!panning&&!pinch&&pointers.size===0){
+      // ★ 修正漏洞：剛在按下時刷錯過格子（gestureLocked），本次按住期間不得靠懸空掃過順手補填；
+      //   放開後重新按下才算第二次嘗試。
+      if(gestureLocked) return;
       if(!bucketOn&&P&&P.selected>=0&&e.pointerType!=='touch'){ paintAt(e); }
       return;
     }
@@ -859,6 +931,9 @@ function setupEvents(){
       applyView();
     }else if(painting&&pointers.size===1){
       moveToolCursor(e);
+      // ★ 修正漏洞：本次按住已在錯色格「閃紅一次」（gestureLocked），放開前不再順手補填／整片誤填，
+      //   必須放開後重新按下才算第二次嘗試（觸控與滑鼠拖動都適用）。
+      if(gestureLocked) return;
       // 刷子模式（油漆筒關閉）：拖動時每一格都算新目標，掃到哪一格填哪一格
       if(!bucketOn) lastPaint=-1;
       paintAt(e);
@@ -873,11 +948,12 @@ function setupEvents(){
       pinch=null;
       if(pointers.size===1){
         // ★ 雙指抬起其中一指：不無腦續填，改為全部抬起等待，避免剩餘手指誤塗
-        painting=false; panning=false; panStart=null; disarmTool();
+        painting=false; setPaintingUI(false); panning=false; panStart=null; disarmTool();
       }
     }
     if(pointers.size===0){
-      painting=false; panning=false; panStart=null;
+      painting=false; setPaintingUI(false); panning=false; panStart=null;
+      gestureLocked=false; // ★ 全部手指／按鈕已放開：解除刷子鎖定，下次按下可正常塗畫
       disarmTool(); // 依開關狀態還原：油漆筒開啟時仍保持「沾色」外觀，關閉時回到經典刷子
       if(wasPainting&&e.pointerType!=='mouse'){
         const now=Date.now();
@@ -972,6 +1048,8 @@ function resetGrid(){
   P.workCtx.putImageData(P.workImg,0,0);
   P.palette.forEach((e,pi)=>{ e.remaining=e.total; e.el.style.display='flex'; e.fillEl.style.width='0%'; });
   P.savedThisRound=false;
+  // ★ 修正漏洞：重置後清空刷錯色防呆紀錄，否則同一格在冷卻期內重新玩會「看不到錯誤提示」
+  lastFlash.clear(); flashes.items.length=0; flashes.length=0;
   if(P.selected>=0) select(P.selected,false);
   updateProgress(); dirty=true; startTimer();
   showToast('↺ 已重置畫布');
