@@ -759,29 +759,31 @@ function paintAt(e){
 
 /* 依模式執行實際塗色（呼叫前已確認該格未填、編號相符） */
 function applyPaint(cell,i){
-  // ★ 修正漏洞：油漆筒開啟時，若連點同一錯色格企圖「閃紅後立刻補成」，一律擋下——
-  //   必須換選對顏色（或換一格）才能用油漆筒整片填滿，維持刷錯懲罰規則。
-  if(bucketOn && P.indexMap[i]!==P.selected) return;
   // 油漆筒「開啟」→ 自動填滿所有附近的同編號連通區域
   if(bucketOn){ floodFill(cell.c,cell.r,P.indexMap[i]); return; }
   // 油漆筒「關閉」→ 經典刷子：掃到哪一格就只填那一格
   paintSingleCell(cell.c,cell.r);
 }
 
+/* 刷錯色的閃紅提示（同一格 700ms 內不重複閃，避免放大後掃過整片錯色時瘋狂閃爍） */
+function flashWrongColor(cell,i){
+  const now=performance.now();
+  const t=lastFlash.get(i);
+  if(t===undefined||now-t>700){
+    lastFlash.set(i,now);
+    if(lastFlash.size>4096){ const first=lastFlash.keys().next().value; lastFlash.delete(first); }
+    if(flashes.items.length>256) flashes.items.shift(); // ★ 上限保護：極端連點也不會讓閃爍佇列無限成長
+    flashes.items.push({c:cell.c,r:cell.r,t:now}); flashes.length=flashes.items.length; dirty=true;
+  }
+}
+
 /* 對指定格子上色＋模式判斷；回傳是否實際塗了東西 */
 function doPaint(cell,i){
   if(P.filled[i]) return false;
   if(P.indexMap[i]!==P.selected){
-    // ★ 刷錯色：明確閃紅提示（同一格 700ms 內不重複閃，避免放大後掃過整片錯色時瘋狂閃爍）。
+    // ★ 刷錯色：明確閃紅提示。
     //   冷卻期內再次刷到同一格仍然失敗，必須等冷卻結束再刷一次才會成功（故意刷錯→再刷才對的玩法）。
-    const now=performance.now();
-    const t=lastFlash.get(i);
-    if(t===undefined||now-t>700){
-      lastFlash.set(i,now);
-      if(lastFlash.size>4096){ const first=lastFlash.keys().next().value; lastFlash.delete(first); }
-      if(flashes.items.length>256) flashes.items.shift(); // ★ 上限保護：極端連點也不會讓閃爍佇列無限成長
-      flashes.items.push({c:cell.c,r:cell.r,t:now}); flashes.length=flashes.items.length; dirty=true;
-    }
+    flashWrongColor(cell,i);
     return false;
   }
   applyPaint(cell,i);
@@ -884,14 +886,21 @@ function setupEvents(){
         if(bucketOn){
           // 油漆筒開啟：按住即進入「填滿」狀態
           armTool(true); paintAt(e);
-          // ★ 修正漏洞：按下的是「錯色格／已填格」時油漆筒不會成功，原本會直接掉進下面的
+          // ★ 修正漏洞：按下的是「錯色格／已填格／尚未選色」時油漆筒不會成功，原本會直接掉進下面的
           //   「視為平移起手」分支；改為留在油漆筒按壓狀態並鎖住本次手勢，
           //   避免放開前被懸空掃過的刷子旁路順手補填（必須放開後重新按下才算第二次嘗試）。
+          // ★ 修正「顏色正確卻無法填色、也沒有閃紅提示」的問題：
+          //   舊判斷把「已填的格子」也当成錯色處理——paintAt 對已填格靜默返回（不閃紅是正確的，
+          //   因為它不是刷錯色），但這裡仍會鎖定整個手勢；一旦玩家在已填區域上按住並拖曳企圖
+          //   找同色的未填格，所有後續經過的「正確顏色空格」都會被 gestureLocked 擋下而完全無法填色，
+          //   同時也不會出現任何紅色錯誤提示。解法：只有「真正刷到錯色格」（該格未填且編號不符）
+          //   才鎖定手勢；已填格／超出範圍一律不鎖定，讓油漆筒可以正常在拖曳中填到正確空格。
           const bi=(cell? cell.r*P.cols+cell.c : -1);
-          if(bi>=0 && (P.selected<0 || P.filled[bi] || P.indexMap[bi]!==P.selected)){
+          const wrongCell=(bi>=0 && P.selected>=0 && !P.filled[bi] && P.indexMap[bi]!==P.selected);
+          if(wrongCell){
             gestureLocked=true;
-            if(bi>=0) lastPaint=bi;
-            if(cell && !P.filled[bi] && P.selected>=0 && P.indexMap[bi]!==P.selected) doPaint(cell,bi);
+            lastPaint=bi;              // 鎖住同一格，避免後續 move 對同格重複觸發
+            flashWrongColor(cell,bi);  // 這一下只閃紅提示，不算完成
           }
         }else if(cell&&P.selected>=0&&!P.filled[cell.r*P.cols+cell.c]&&P.indexMap[cell.r*P.cols+cell.c]===P.selected){
           // 經典刷子（關閉）：按下的那一格正是選取編號 → 直接單填
