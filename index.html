@@ -697,9 +697,9 @@ function render(){
    ================================================================ */
 /* ---------- 油漆筒（製作油漆筒按鈕） ---------- */
 let painting=false, panning=false, pinch=null, panStart=null, lastPaint=-1, lastTap={t:0,x:0,y:0};
-// ★ 修正漏洞：滑鼠按下「錯色格」後，本次按住期間鎖住刷子自動補填（gestureLocked），
-//   必須放開重新按下才算第二次嘗試；新按下（pointerdown）時一律重置此旗標。
-let gestureLocked=false;
+// ★ 已移除「錯色後鎖手勢」的懲罰機制（原 gestureLocked）：
+//   它正是「顏色正確卻像有延遲才填得起來」的根源——刷錯一次後，拖曳途中經過的正確空格
+//   全被擋下，必須放開重新按下才填得進去。現在錯色只閃紅提示、不鎖任何行為。
 const pointers=new Map();
 
 /* 油漆筒「開啟」＝切換式開關：開啟時單指觸碰會自動填滿所有相鄰的同編號區域；
@@ -781,8 +781,12 @@ function flashWrongColor(cell,i){
 function doPaint(cell,i){
   if(P.filled[i]) return false;
   if(P.indexMap[i]!==P.selected){
-    // ★ 刷錯色：明確閃紅提示。
-    //   冷卻期內再次刷到同一格仍然失敗，必須等冷卻結束再刷一次才會成功（故意刷錯→再刷才對的玩法）。
+    // ★ 修正「顏色明明正確、填色卻像有延遲」的問題（本輪修復重點）：
+    //   舊規則把「第一次刷錯」只當提示、不落地，同格要等 700ms 冷卻後「再刷一次」才填得進去；
+    //   但拖曳時 lastPaint 會鎖住該格不再重複觸發，玩家必須放開再重新按下／等待，
+    //   看起來就是「選對顏色也要等一下才填得起來」的假性延遲。
+    //   新規則：刷錯色＝立即紅色閃燈提示（保持 700ms 防瘋狂閃爍），但不做任何懲罰、不鎖手勢；
+    //   只要編號與選取色相符，一律「立刻填色」，完全沒有冷卻或延遲。
     flashWrongColor(cell,i);
     return false;
   }
@@ -866,7 +870,6 @@ function setupEvents(){
 
   stage.addEventListener('pointerdown',e=>{
     if(!P) return;
-    gestureLocked=false; // ★ 新的一次按下＝新的嘗試，解除上一手的刷子鎖定
     stage.setPointerCapture(e.pointerId);
     pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
     if(pointers.size===2){
@@ -886,38 +889,24 @@ function setupEvents(){
         if(bucketOn){
           // 油漆筒開啟：按住即進入「填滿」狀態
           armTool(true); paintAt(e);
-          // ★ 修正漏洞：按下的是「錯色格／已填格／尚未選色」時油漆筒不會成功，原本會直接掉進下面的
-          //   「視為平移起手」分支；改為留在油漆筒按壓狀態並鎖住本次手勢，
-          //   避免放開前被懸空掃過的刷子旁路順手補填（必須放開後重新按下才算第二次嘗試）。
-          // ★ 修正「顏色正確卻無法填色、也沒有閃紅提示」的問題：
-          //   舊判斷把「已填的格子」也当成錯色處理——paintAt 對已填格靜默返回（不閃紅是正確的，
-          //   因為它不是刷錯色），但這裡仍會鎖定整個手勢；一旦玩家在已填區域上按住並拖曳企圖
-          //   找同色的未填格，所有後續經過的「正確顏色空格」都會被 gestureLocked 擋下而完全無法填色，
-          //   同時也不會出現任何紅色錯誤提示。解法：只有「真正刷到錯色格」（該格未填且編號不符）
-          //   才鎖定手勢；已填格／超出範圍一律不鎖定，讓油漆筒可以正常在拖曳中填到正確空格。
-          const bi=(cell? cell.r*P.cols+cell.c : -1);
-          const wrongCell=(bi>=0 && P.selected>=0 && !P.filled[bi] && P.indexMap[bi]!==P.selected);
-          if(wrongCell){
-            gestureLocked=true;
-            lastPaint=bi;              // 鎖住同一格，避免後續 move 對同格重複觸發
-            flashWrongColor(cell,bi);  // 這一下只閃紅提示，不算完成
-          }
-        }else if(cell&&P.selected>=0&&!P.filled[cell.r*P.cols+cell.c]&&P.indexMap[cell.r*P.cols+cell.c]===P.selected){
-          // 經典刷子（關閉）：按下的那一格正是選取編號 → 直接單填
-          doPaint(cell,cell.r*P.cols+cell.c);
+          // ★ 修正「顏色正確卻要等一下才填得起來（假性延遲）」的最後元凶：
+          //   舊邏輯在按下錯色格時會設定 gestureLocked＋lastPaint 鎖住整個手勢，
+          //   玩家按住拖離錯色格後，途中經過的「正確顏色空格」全被鎖住不填，
+          //   必須放開再重新按下才填得進去——看起來就像填色有延遲。
+          //   新邏輯：按下錯色格只做「紅色閃燈提示」，完全不鎖手勢；
+          //   拖曳過程中遇到正確空格一律立即填色，零延遲、零懲罰。
         }else{
-          // ★ 修正漏洞：滑鼠按到其他位置（已填的格子／錯色格／尚未選色）時，
-          //   原本會先閃紅、再因下面「brush 懸空掃過即填色」規則於 pointermove 立刻把該格補填成功，
-          //   等於完全繞過「故意刷錯→再刷一次才成功」的冷卻防呆。
-          //   解法：按下未成功塗色的那一下視為「第一次嘗試」，同時進入平移起手式，
-          //   並鎖定此手勢期間不再自動刷色（必須放開後重新按下才算第二次嘗試）。
-          const i=(cell? cell.r*P.cols+cell.c : -1);
-          if(i>=0) lastPaint=i; // 鎖住同一格，避免后續 move 對同格重複觸發
-          if(i>=0 && !P.filled[i] && P.selected>=0 && P.indexMap[i]!==P.selected){
-            doPaint(cell,i);    // 這一下只閃紅提示，不算完成
-            gestureLocked=true; // 本次按住期間不再讓 brush 順手補填
+          // 經典刷子（關閉）：按下的那一格交給 paintAt 即時處理——
+          //   編號相符→立刻填色；編號不符→只閃紅提示；已填格→靜默略過。
+          // ★ 若按下的位置不是「可立即填色的正確空格」（錯色／已填／畫布外／尚未選色），
+          //   視為平移起手式，讓使用者仍可拖曳移動畫面；但不鎖定刷子——
+          //   拖曳中一旦掃到正確顏色的空格，依然會即時填色（零延遲）。
+          const bi=(cell? cell.r*P.cols+cell.c : -1);
+          const paintedNow=(bi>=0 && P.selected>=0 && !P.filled[bi] && P.indexMap[bi]===P.selected);
+          if(!paintedNow){
+            panning=true; panStart={x:e.clientX,y:e.clientY,tx:view.tx,ty:view.ty};
           }
-          panning=true; panStart={x:e.clientX,y:e.clientY,tx:view.tx,ty:view.ty};
+          paintAt(e);
         }
       }
     }
@@ -925,10 +914,8 @@ function setupEvents(){
 
   stage.addEventListener('pointermove',e=>{
     // 油漆筒「關閉」＝經典刷子：滑鼠懸停在畫布上掃過時，掃到哪一格就只填那一格（觸控不適用）
+    // ★ 已移除 gestureLocked：懸空掃過與拖曳都立即填色，零延遲、零懲罰。
     if(!painting&&!panning&&!pinch&&pointers.size===0){
-      // ★ 修正漏洞：剛在按下時刷錯過格子（gestureLocked），本次按住期間不得靠懸空掃過順手補填；
-      //   放開後重新按下才算第二次嘗試。
-      if(gestureLocked) return;
       if(!bucketOn&&P&&P.selected>=0&&e.pointerType!=='touch'){ paintAt(e); }
       return;
     }
@@ -952,9 +939,8 @@ function setupEvents(){
       applyView();
     }else if(painting&&pointers.size===1){
       moveToolCursor(e);
-      // ★ 修正漏洞：本次按住已在錯色格「閃紅一次」（gestureLocked），放開前不再順手補填／整片誤填，
-      //   必須放開後重新按下才算第二次嘗試（觸控與滑鼠拖動都適用）。
-      if(gestureLocked) return;
+      // ★ 已移除 gestureLocked 鎖定：拖曳途中掃到正確顏色的空格一律立即填色（零延遲）；
+      //   錯色格只會閃紅提示，不會擋住後續的正確填色。
       // 刷子模式（油漆筒關閉）：拖動時每一格都算新目標，掃到哪一格填哪一格
       if(!bucketOn) lastPaint=-1;
       paintAt(e);
@@ -974,7 +960,6 @@ function setupEvents(){
     }
     if(pointers.size===0){
       painting=false; setPaintingUI(false); panning=false; panStart=null;
-      gestureLocked=false; // ★ 全部手指／按鈕已放開：解除刷子鎖定，下次按下可正常塗畫
       disarmTool(); // 依開關狀態還原：油漆筒開啟時仍保持「沾色」外觀，關閉時回到經典刷子
       if(wasPainting&&e.pointerType!=='mouse'){
         const now=Date.now();
