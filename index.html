@@ -244,7 +244,7 @@ body.tool-armed #tool-cursor{display:block}
 </div>
   <button class="btn" onclick="startGame()">🎨 開始挑戰</button>
   <button class="btn btn-ghost" onclick="showScreen('screen-menu')">返回</button>
-  <p class="res-hint">💡 單指 / 左鍵＝填色（同色區域會整片填滿）<br>雙指 / 右鍵拖曳＝平移・縮放 雙擊＝回到全覽</p>
+  <p class="res-hint">💡 單指 / 左鍵＝填色（油漆筒開啟時同色區域會整片填滿）<br>雙指＝移動畫面・放大縮小／右鍵拖曳＝平移・滾輪縮放 雙擊＝回到全覽</p>
 </div>
 
 <!-- ============ GAME ============ -->
@@ -662,8 +662,9 @@ function render(){
 let painting=false, panning=false, pinch=null, panStart=null, lastPaint=-1, lastTap={t:0,x:0,y:0};
 const pointers=new Map();
 
-/* 油漆筒「開啟」＝切換式開關：開啟時拖曳會自動填滿所有相鄰的同編號區域；
-   關閉時只是經典刷子——手指／滑鼠掃到哪一格就只填那一格。 */
+/* 油漆筒「開啟」＝切換式開關：開啟時單指觸碰會自動填滿所有相鄰的同編號區域；
+   關閉時單指只是經典刷子——掃到哪一格就只填那一格。
+   ★ 手勢規則（無論油漆筒是否開啟）：單指＝填色，雙指＝移動畫面／縮放。 */
 let toolArmed=false, bucketOn=false;
 function setToolColor(){
   const e=(P&&P.selected>=0)?P.palette[P.selected]:null;
@@ -679,7 +680,7 @@ function toggleBucket(){
   bucketOn=!bucketOn;
   if(bucketOn) setToolColor(); // 開啟時游標／刷子頭部立即沾上選取顏色
   updateBucketUI();
-  showToast(bucketOn?'🪣 油漆筒已開啟：拖動將自動填滿所有附近的同編號區域':'🖌️ 油漆筒已關閉：掃到哪一格就只填那一格');
+  showToast(bucketOn?'🪣 油漆筒已開啟：單指觸碰自動填滿所有附近的同編號區域（雙指仍可移動／縮放）':'🖌️ 油漆筒已關閉：單指掃到哪一格就只填那一格（雙指仍可移動／縮放）');
 }
 /* 刷子游標：油漆筒「開啟」或按住拖動中，顯示沾滿選取顏色的油漆筒；關閉且未按住時維持系統游標 */
 function armTool(on){
@@ -791,12 +792,30 @@ function setupEvents(){
   if(eventsBound) return; eventsBound=true;
   stage=$('canvas-container');
 
+  /* ---------- 雙指手勢：開始「移動畫面／縮放」（同時取消單指填色） ---------- */
+  function beginTwoFinger(){
+    painting=false; panning=false; panStart=null; disarmTool();
+    const [a,b]=[...pointers.values()];
+    const rect=stage.getBoundingClientRect();
+    const mid={x:(a.x+b.x)/2-rect.left,y:(a.y+b.y)/2-rect.top};
+    const m=metrics();
+    pinch={d0:Math.hypot(a.x-b.x,a.y-b.y)||1,s0:view.scale,u:(mid.x-m.dx)/m.cell,v:(mid.y-m.dy)/m.cell};
+  }
+
   stage.addEventListener('pointerdown',e=>{
     if(!P) return;
     stage.setPointerCapture(e.pointerId);
     pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
-    if(pointers.size===1){
+    if(pointers.size===2){
+      // ★ 第二指落下：無論油漆筒是否開啟，立即改為「雙指＝移動／縮放」
+      beginTwoFinger();
+    }else if(pointers.size===1){
       if(e.button===2||e.button===1){ panning=true; panStart={x:e.clientX,y:e.clientY,tx:view.tx,ty:view.ty}; }
+      else if(e.pointerType==='touch'){
+        // ★ 觸控單指：一律先進入填色模式（開關決定單格刷或油漆筒），拖曳不會誤移畫面；
+        //   若中途變成雙指，上面的 size===2 分支會立刻取消填色改走手勢。
+        painting=true; lastPaint=-1; setToolColor(); moveToolCursor(e); armTool(true); paintAt(e);
+      }
       else{
         painting=true; lastPaint=-1; setToolColor(); moveToolCursor(e);
         const cell=cellFromEvent(e);
@@ -807,22 +826,15 @@ function setupEvents(){
           // 經典刷子（關閉）：按下的那一格正是選取編號 → 直接單填
           doPaint(cell,cell.r*P.cols+cell.c);
         }else{
-          // 其他情況視為起手拖曳 → 進入平移，不會誤閃紅、也不會卡住無法移動畫面
+          // 滑鼠按到其他位置 → 視為起手拖曳平移，不會誤閃紅
           panning=true; panStart={x:e.clientX,y:e.clientY,tx:view.tx,ty:view.ty};
         }
       }
-    }else if(pointers.size===2){
-      painting=false; panning=false; disarmTool();
-      const [a,b]=[...pointers.values()];
-      const rect=stage.getBoundingClientRect();
-      const mid={x:(a.x+b.x)/2-rect.left,y:(a.y+b.y)/2-rect.top};
-      const m=metrics();
-      pinch={d0:Math.hypot(a.x-b.x,a.y-b.y)||1,s0:view.scale,u:(mid.x-m.dx)/m.cell,v:(mid.y-m.dy)/m.cell};
     }
   });
 
   stage.addEventListener('pointermove',e=>{
-    // 油漆筒「關閉」＝經典刷子：在畫布上掃過（含滑鼠懸停／手指拖曳）掃到哪一格就只填那一格
+    // 油漆筒「關閉」＝經典刷子：滑鼠懸停在畫布上掃過時，掃到哪一格就只填那一格（觸控不適用）
     if(!painting&&!panning&&!pinch&&pointers.size===0){
       if(!bucketOn&&P&&P.selected>=0&&e.pointerType!=='touch'){ paintAt(e); }
       return;
@@ -830,6 +842,7 @@ function setupEvents(){
     if(!pointers.has(e.pointerId)) return;
     pointers.get(e.pointerId).x=e.clientX; pointers.get(e.pointerId).y=e.clientY;
     if(pinch&&pointers.size>=2){
+      // ★ 雙指：同時處理「縮放（捏合距離變化）」與「移動畫面（兩指中點位移）」
       const [a,b]=[...pointers.values()];
       const rect=stage.getBoundingClientRect();
       const d=Math.hypot(a.x-b.x,a.y-b.y)||1;
@@ -856,7 +869,13 @@ function setupEvents(){
     if(!pointers.has(e.pointerId)) return;
     const wasPainting=painting&&pointers.size===1;
     pointers.delete(e.pointerId);
-    if(pointers.size<2) pinch=null;
+    if(pointers.size<2&&pinch){
+      pinch=null;
+      if(pointers.size===1){
+        // ★ 雙指抬起其中一指：不無腦續填，改為全部抬起等待，避免剩餘手指誤塗
+        painting=false; panning=false; panStart=null; disarmTool();
+      }
+    }
     if(pointers.size===0){
       painting=false; panning=false; panStart=null;
       disarmTool(); // 依開關狀態還原：油漆筒開啟時仍保持「沾色」外觀，關閉時回到經典刷子
