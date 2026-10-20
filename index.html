@@ -829,7 +829,7 @@ function doPaint(cell,i){
    徹底消除逐次 putImageData 造成的整幅紋理重傳。 */
 let pendingDirtyRects=null; // null = 尚無待同步；[] = 已排定但尚未累積任何矩形
 function markWorkDirty(x,y,w,h){
-  if(!pendingDirtyRects) return; // 本幀稍後會被全量同步，不必再記錄
+  if(!pendingDirtyRects) pendingDirtyRects=[]; // ★ 修正漏洞 1：初始化為空陣列，確保髒矩形能被記錄
   pendingDirtyRects.push(x,y,w,h);
 }
 function syncWorkCanvas(){
@@ -837,7 +837,8 @@ function syncWorkCanvas(){
   if(pendingDirtyRects.length){
     const R=pendingDirtyRects;
     for(let k=0;k<R.length;k+=4){
-      P.workCtx.putImageData(P.workImg,R[k],R[k+1],R[k],R[k+1],R[k+2],R[k+3]);
+      // ★ 修正漏洞 2：將 dx, dy 設為 0，讓 dirtyX, dirtyY 直接對應畫布上的 X, Y 座標
+      P.workCtx.putImageData(P.workImg, 0, 0, R[k], R[k+1], R[k+2], R[k+3]);
     }
   }else{
     P.workCtx.putImageData(P.workImg,0,0); // 安全兜底（重置等情境）
