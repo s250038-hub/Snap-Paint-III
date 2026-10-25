@@ -216,6 +216,7 @@ body.bucket-on:not(.painting) #tool-cursor,body.tool-armed:not(.painting) #tool-
   <h1>一拍即玩<small>SNAPPAINT</small></h1>
   <p class="tag">📸 拍下一張照片，它會被切成上千個編號方格。<br>選色、填滿、逐步重現你的原作！</p>
   <button class="btn" onclick="triggerUpload()">📷 即影即玩 / 🖼️ 從相簿選擇</button>
+  <button class="btn btn-good" id="resume-btn" style="display:none" onclick="resumeGame()">▶️ 繼續上次進度</button>
   <button class="btn btn-ghost" onclick="showGallery()">🏆 我的作品</button>
   <input type="file" id="file-input" accept="image/*" style="display:none" onchange="handleFileSelect(event)">
 </div>
@@ -339,18 +340,91 @@ let chosenPct = 100;
 let P = null;
 const view = { scale:1, tx:0, ty:0 };
 let dirty = true;
-// ★ 編號尚未全部補齊的旗標：render() 結尾若為 true，會保留 dirty 讓後續幀繼續繪製編號，
-//   直到所有可見格子的編號都畫完為止（填色畫面則在第一幀就立即顯示，不受影響）。
 let numbersIncomplete = false;
-// ★ 修正漏洞：flashes 採「固定物件＋原地清空」，避免多處重新賦值造成指向不同陣列、緩存永不釋放
 const flashes = { items: [], length: 0 };
-// ★ 防呆：刷錯色時，同一格在短時間內不重複閃紅（放大後快速掃過整片錯色不會瘋狂閃爍）；
-//   但不同格仍會各自提示一次，保留「故意刷錯再刷對」的確認回饋。宣告在最頂端，供各區塊共用。
 const lastFlash = new Map();
 
 const $ = id => document.getElementById(id);
 const clamp = (v,a,b)=>Math.min(Math.max(v,a),b);
 const fmt = n => n.toLocaleString('en-US');
+
+/* ---------------- AUTO-SAVE ENCODING (RLE) ---------------- */
+function encodeRLE_Uint16(arr) {
+  let binary = '';
+  let i = 0;
+  const len = arr.length;
+  while (i < len) {
+    const val = arr[i];
+    let count = 1;
+    while (i + count < len && arr[i + count] === val && count < 65535) count++;
+    binary += String.fromCharCode(val & 0xFF, (val >> 8) & 0xFF, count & 0xFF, (count >> 8) & 0xFF);
+    i += count;
+  }
+  return btoa(binary);
+}
+function decodeRLE_Uint16(str, totalLen) {
+  const bin = atob(str);
+  const arr = new Uint16Array(totalLen);
+  let i = 0, outIdx = 0;
+  while (i < bin.length) {
+    const v0 = bin.charCodeAt(i++), v1 = bin.charCodeAt(i++);
+    const c0 = bin.charCodeAt(i++), c1 = bin.charCodeAt(i++);
+    const val = v0 | (v1 << 8), count = c0 | (c1 << 8);
+    for (let k = 0; k < count; k++) arr[outIdx++] = val;
+  }
+  return arr;
+}
+function encodeRLE_Uint8(arr) {
+  let binary = '';
+  let i = 0;
+  const len = arr.length;
+  while (i < len) {
+    const val = arr[i];
+    let count = 1;
+    while (i + count < len && arr[i + count] === val && count < 255) count++;
+    binary += String.fromCharCode(val, count);
+    i += count;
+  }
+  return btoa(binary);
+}
+function decodeRLE_Uint8(str, totalLen) {
+  const bin = atob(str);
+  const arr = new Uint8Array(totalLen);
+  let i = 0, outIdx = 0;
+  while (i < bin.length) {
+    const val = bin.charCodeAt(i++), count = bin.charCodeAt(i++);
+    for (let k = 0; k < count; k++) arr[outIdx++] = val;
+  }
+  return arr;
+}
+function getResizedImageSrc(img, maxDim = 800) {
+  if (!img || !img.naturalWidth) return '';
+  const w = img.naturalWidth, h = img.naturalHeight;
+  const ratio = Math.min(maxDim / w, maxDim / h, 1);
+  const nw = Math.round(w * ratio), nh = Math.round(h * ratio);
+  const c = document.createElement('canvas');
+  c.width = nw; c.height = nh;
+  c.getContext('2d').drawImage(img, 0, 0, nw, nh);
+  return c.toDataURL('image/jpeg', 0.8);
+}
+
+let baseSaveJSON = null;
+let lastSavedFilledStr = "";
+function saveAutoState() {
+  if (!P || !baseSaveJSON) return;
+  try {
+    const filledStr = encodeRLE_Uint8(P.filled);
+    if (filledStr === lastSavedFilledStr) return;
+    lastSavedFilledStr = filledStr;
+    const elapsed = Math.floor((P.elapsed || (Date.now() - P.startTs)) / 1000);
+    const json = baseSaveJSON
+      .replace('"{FILLED_PLACEHOLDER}"', `"${filledStr}"`)
+      .replace('"{ELAPSED_PLACEHOLDER}"', `${elapsed}`);
+    localStorage.setItem('snapPaintAutoSave', json);
+  } catch(e) {
+    console.warn("AutoSave failed", e);
+  }
+}
 
 /* ---------------- screens / overlays / toast ---------------- */
 function showScreen(id){
@@ -419,8 +493,6 @@ function startGame(){
     catch(err){ hideOverlay('overlay-loading'); showToast('生成失敗：圖片太大或記憶體不足'); console.error(err); return; }
     hideOverlay('overlay-loading');
     showScreen('screen-game');
-    // 強制先完成一次版面配置，確保容器已取得實際尺寸後再建立畫布；
-    // 若容器尺寸仍為 0（如進入全螢幕／填滿畫面過程中），延後重試，避免畫布變成 0×0 導致黑屏。
     const initCanvasWhenReady=(tries=0)=>{
       const el=$('canvas-container');
       if(el && el.clientWidth>0 && el.clientHeight>0){
@@ -492,22 +564,34 @@ function buildPuzzle(f){
       grayData:grayImg.data,
       selected:-1,selectedEl:null,filledCount:0,
       savedThisRound:false,startTs:Date.now(),elapsed:0 };
-  // ★ 刷錯色冷卻機制：新畫布一律清空閃爍緩存與防呆紀錄（原地清空，避免重新賦值不同步）
   flashes.items.length=0; flashes.length=0; lastFlash.clear();
-  pendingDirtyRects=null; numbersIncomplete=false; // ★ 新畫布重置每幀合併同步狀態
+  pendingDirtyRects=null; numbersIncomplete=false;
   renderPalette();
   updateProgress();
   $('num-input').value='';
+
+  // ★ AUTO-SAVE INITIALIZATION
+  baseSaveJSON = JSON.stringify({
+    v: 2,
+    imgSrc: getResizedImageSrc(srcImg, 800),
+    cols: P.cols,
+    rows: P.rows,
+    indexMap: encodeRLE_Uint16(P.indexMap),
+    filled: "{FILLED_PLACEHOLDER}",
+    palette: P.palette.map(e => ({ key:e.key, r:e.r, g:e.g, b:e.b, total:e.total, num:e.num, text:e.text, gray:e.gray })),
+    elapsed: "{ELAPSED_PLACEHOLDER}",
+    chosenPct: chosenPct
+  });
+  lastSavedFilledStr = "";
+  saveAutoState();
 }
 
 /* ---------------- palette DOM ---------------- */
-// ★ 防呆：極舊瀏覽器／WebView 無 IntersectionObserver 時降級為「一律平滑捲動」，避免腳本崩潰
 const palIO=('IntersectionObserver' in window)?new IntersectionObserver(es=>{
   es.forEach(en=>{ if(en.isIntersecting) en.target._vis=true; });
 },{root:$('palette-container'),threshold:0.6}):null;
 function renderPalette(){
   const box=$('palette-container');
-  // ★ 重建前先釋放舊節點，避免離屏畫布（workCanvas）被殘留 DOM 引用而無法回收（記憶體漏洞）
   for(const e of P.palette){ if(e.el&&palIO) palIO.unobserve(e.el); e.el=null; e.fillEl=null; }
   box.innerHTML='';
   const frag=document.createDocumentFragment();
@@ -525,8 +609,6 @@ function renderPalette(){
     frag.appendChild(item);
   });
   box.appendChild(frag);
-  // ★ 大型調色盤（最多 4096 色）只在進入視口後才啟用平滑捲動定位，
-  //   避免對數千個離屏元素呼叫 scrollIntoView 造成卡頓／當機
   if(palIO) for(const e of P.palette) palIO.observe(e.el);
 }
 function updatePaletteItem(pi){
@@ -544,15 +626,8 @@ function select(pi,scroll){
   $('num-input').value=e.num;
   if(P.selectedEl) P.selectedEl.classList.remove('selected');
   e.el.classList.add('selected'); P.selectedEl=e.el;
-  // ★ 平滑捲動僅用於「使用者主動選色」且元素曾進入視口；
-  //   自動接色／重置等情境改用即時定位，避免對數千離屏元素做平滑動畫造成卡頓
-  // ★ 修正漏洞：scrollIntoView 除了捲動調色盤本身，還會順帶把「所有祖先容器」
-  //   （包含上方畫布所在的頁面）一起捲動，導致點擊數字後畫面左移、擋住左方列的格仔。
-  //   改為手動只調整 #palette-container 的横向捲動位置，絕不觸碰任何祖先捲動／頁面捲動。
   if(scroll) scrollPaletteIntoView(e.el, !!(palIO && !e.el._vis));
 }
-// 只在調色盤自己的捲動容器內水平置中該項目；block 完全不設（等同 nearest），
-// 因此不會垂直捲動頁面，也不會讓上方畫布位移。
 function scrollPaletteIntoView(el,instant){
   const box=$('palette-container');
   if(!box||!el) return;
@@ -580,8 +655,6 @@ function selectNumFromInput(){
   select(pi,true);
 }
 
-/* 油漆筒為「切換式開關」：點一下開啟／關閉。
-   開啟＝拖動自動填滿所有附近的同編號區域；關閉＝經典刷子，掃到哪一格只填那一格 */
 function disarmTool(){ armTool(false); }
 function bindToolBtn(){
   toolBtn.addEventListener('click',()=>{ if(!P){ showToast('🖌️ 油漆筒：開始挑戰後即可使用'); return; } toggleBucket(); });
@@ -592,17 +665,14 @@ function bindToolBtn(){
    ================================================================ */
 let stage=null, cvs=null, ctx=null, dpr=1;
 const toolBtn=$('tool-btn'), toolCursor=$('tool-cursor');
-// 開關狀態下游標／按鈕顏色需跟著選取色更新（油漆筒開啟時）
 const _origSelect=select;
-select=function(pi,scroll){ _origSelect(pi,scroll); setToolColor(); }; // ★ 修正漏洞：游標／刷子沾色隨時跟隨選取顏色（原本關閉油漆筒後改色，颜色不再更新）
+select=function(pi,scroll){ _origSelect(pi,scroll); setToolColor(); };
 bindToolBtn();
 function resizeMainCanvas(){
   stage=$('canvas-container'); cvs=$('main-canvas'); ctx=cvs.getContext('2d');
   dpr=window.devicePixelRatio||1;
-  // 防黑屏：容器尺寸必須 > 0，且畫布總像素不超過瀏覽器上限（約 16,777,216 px），
-  // 否則在填滿畫面／全螢幕或高 DPR 裝置上會建立無效畫布，導致整片黑屏。
   const w=stage.clientWidth||0, h=stage.clientHeight||0;
-  const MAX_TOTAL_PX=16000000; // 留安全餘量，低於 Safari/Chrome 的 ~16.7M 上限
+  const MAX_TOTAL_PX=16000000;
   let bw=Math.max(1,Math.round(w*dpr)), bh=Math.max(1,Math.round(h*dpr));
   const total=bw*bh;
   if(total>MAX_TOTAL_PX){ const k=Math.sqrt(MAX_TOTAL_PX/total); bw=Math.max(1,Math.floor(bw*k)); bh=Math.max(1,Math.floor(bh*k)); }
@@ -629,10 +699,7 @@ function resetView(){ view.scale=1; view.tx=0; view.ty=0; applyView(); }
 function render(){
   if(!P||!ctx) return;
   const m=metrics();
-  // 防黑屏：填滿畫面／全螢幕切換過程中容器可能暫時為 0 尺寸，
-  // 此時跳過繪製並保留 dirty，等尺寸恢復後自動重繪。
   if(m.W<=0||m.H<=0){ dirty=true; return; }
-  // ★ 每幀一次、合併同步所有待更新的工作畫布區域（取代舊的逐次 putImageData）
   syncWorkCanvas();
   ctx.setTransform(dpr,0,0,dpr,0,0);
   ctx.fillStyle='#0B0F15'; ctx.fillRect(0,0,m.W,m.H);
@@ -662,10 +729,6 @@ function render(){
     const size=[0, m.cell*.58, m.cell*.58, m.cell*.5, m.cell*.375];
     const fontOf=l=>`700 ${size[l].toFixed(1)}px ${NUM_FONT}`;
     let curLen=0;
-    // ★ 最高難度延遲元凶之一：舊寫法對視口內「所有未填格」（動輒數十萬格）逐格做完整
-    //   strokeText+fillText——單幀可耗時數百毫秒，油漆筒一次填色後接下來好幾秒畫面都在重畫編號，
-    //   看起來就是嚴重的填色延遲。新寫法：只繪製「真正在螢幕視窗內可見」的格子＋每幀編號繪製
-    //   不超過約 6ms 的時間預算（超下一幀繼續補），讓填色結果能立即顯示、編號慢慢補齊即可。
     const vw=Math.min(m.W, window.innerWidth||m.W), vh=Math.min(m.H, window.innerHeight||m.H);
     const vc0=clamp(Math.floor(-m.dx/m.cell),c0,c1);
     const vc1=clamp(Math.ceil((vw-m.dx)/m.cell),c0,c1);
@@ -686,20 +749,15 @@ function render(){
         const x=m.dx+(c+.5)*m.cell;
         ctx.strokeText(e.num,x,y);
         ctx.fillText(e.num,x,y);
-        // ★ 每 64 格檢查一次時間預算：超時就中斷，下一幀從頭補齊（填色畫面已先顯示）
         if((++numCount&63)===0&&performance.now()>budgetEnd){ numBudgetHit=true; r=vr1; break; }
       }
     }
-    // 若視窗外仍有未填格、或本幀被時間預算截斷，保持 dirty 讓後續幀繼續補畫編號
     numbersIncomplete=numBudgetHit||vc1<c1||vr1<r1;
   }else{
     numbersIncomplete=false;
   }
 
   const now=performance.now();
-  // ★ 修正「放大時刷錯色只閃一下、看不到的問題」：
-  //   改為「先繪製、後原地移除」，確保每一幀閃爍都完整顯示到時間結束；
-  //   並用固定物件 flashes.items 原地清空，避免重新賦值造成不同步的緩存漏洞。
   if(flashes.length){
     let w=0, expired=false;
     for(let k=0;k<flashes.length;k++){
@@ -707,12 +765,11 @@ function render(){
       if(a<=0){ expired=true; continue; }
       ctx.fillStyle=`rgba(255,95,84,${(.55*a).toFixed(3)})`;
       ctx.fillRect(m.dx+f.c*m.cell,m.dy+f.r*m.cell,m.cell,m.cell);
-      flashes.items[w++]=f; // 未過期的原地保留（維持時間順序）
+      flashes.items[w++]=f;
     }
     flashes.items.length=w; flashes.length=w;
     if(flashes.length||expired) dirty=true;
   }
-  // ★ 編號被時間預算截斷尚未畫完 → 保留 dirty，下一幀繼續補齊（填色結果已在本幀立即顯示）
   if(numbersIncomplete) dirty=true;
 }
 (function loop(){ if(dirty){ dirty=false; render(); } requestAnimationFrame(loop); })();
@@ -720,16 +777,9 @@ function render(){
 /* ================================================================
    INTERACTION — paint / pan / pinch / wheel
    ================================================================ */
-/* ---------- 油漆筒（製作油漆筒按鈕） ---------- */
 let painting=false, panning=false, pinch=null, panStart=null, lastPaint=-1, lastTap={t:0,x:0,y:0};
-// ★ 已移除「錯色後鎖手勢」的懲罰機制（原 gestureLocked）：
-//   它正是「顏色正確卻像有延遲才填得起來」的根源——刷錯一次後，拖曳途中經過的正確空格
-//   全被擋下，必須放開重新按下才填得進去。現在錯色只閃紅提示、不鎖任何行為。
 const pointers=new Map();
 
-/* 油漆筒「開啟」＝切換式開關：開啟時單指觸碰會自動填滿所有相鄰的同編號區域；
-   關閉時單指只是經典刷子——掃到哪一格就只填那一格。
-   ★ 手勢規則（無論油漆筒是否開啟）：單指＝填色，雙指＝移動畫面／縮放。 */
 let toolArmed=false, bucketOn=false;
 function setToolColor(){
   const e=(P&&P.selected>=0)?P.palette[P.selected]:null;
@@ -738,22 +788,18 @@ function setToolColor(){
 function updateBucketUI(){
   document.body.classList.toggle('bucket-on',bucketOn);
   toolBtn.classList.toggle('active',bucketOn);
-  toolBtn.setAttribute('aria-pressed',(bucketOn||toolArmed)?'true':'false'); // ★ 修正：開關切換時同步無障礙狀態，且不被按壓狀態覆寫
+  toolBtn.setAttribute('aria-pressed',(bucketOn||toolArmed)?'true':'false');
   const lbl=$('tool-mode'); if(lbl) lbl.textContent=bucketOn?'油漆筒':'刷子';
 }
 function toggleBucket(){
   bucketOn=!bucketOn;
-  setToolColor(); // ★ 修正漏洞：無論開啟或關閉，游標／刷子頭部顏色都立即跟隨選取色
+  setToolColor();
   updateBucketUI();
   showToast(bucketOn?'🪣 油漆筒已開啟：單指觸碰自動填滿所有附近的同編號區域（雙指仍可移動／縮放）':'🖌️ 油漆筒已關閉：單指掃到哪一格就只填那一格（雙指仍可移動／縮放）');
 }
-/* 刷子游標：油漆筒「開啟」且未按住塗畫時，顯示沾滿選取顏色的油漆筒；
-   ★ 一旦開始塗畫（painting=true）立即隱藏圖示並還原系統十字準線，避免圖示擋住格線與編號 */
 function armTool(on){
   if(toolArmed===on) return;
   toolArmed=on;
-  // ★ 修正漏洞：塗畫進行中一律不得浮現工具圖示——若因按壓中途放開滑鼠、但手指／按鈕仍在塗畫，
-  //   原本只靠 CSS :not(.painting) 遮罩，此處再補一道保險，避免圖示在 painting 狀態下被重新啟用。
   if(on&&painting) on=false;
   document.body.classList.toggle('tool-armed',on||bucketOn);
   toolBtn.setAttribute('aria-pressed',(on||bucketOn)?'true':'false');
@@ -782,36 +828,25 @@ function paintAt(e){
   doPaint(cell,i);
 }
 
-/* 依模式執行實際塗色（呼叫前已確認該格未填、編號相符） */
 function applyPaint(cell,i){
-  // 油漆筒「開啟」→ 自動填滿所有附近的同編號連通區域
   if(bucketOn){ floodFill(cell.c,cell.r,P.indexMap[i]); return; }
-  // 油漆筒「關閉」→ 經典刷子：掃到哪一格就只填那一格
   paintSingleCell(cell.c,cell.r);
 }
 
-/* 刷錯色的閃紅提示（同一格 700ms 內不重複閃，避免放大後掃過整片錯色時瘋狂閃爍） */
 function flashWrongColor(cell,i){
   const now=performance.now();
   const t=lastFlash.get(i);
   if(t===undefined||now-t>700){
     lastFlash.set(i,now);
     if(lastFlash.size>4096){ const first=lastFlash.keys().next().value; lastFlash.delete(first); }
-    if(flashes.items.length>256) flashes.items.shift(); // ★ 上限保護：極端連點也不會讓閃爍佇列無限成長
+    if(flashes.items.length>256) flashes.items.shift();
     flashes.items.push({c:cell.c,r:cell.r,t:now}); flashes.length=flashes.items.length; dirty=true;
   }
 }
 
-/* 對指定格子上色＋模式判斷；回傳是否實際塗了東西 */
 function doPaint(cell,i){
   if(P.filled[i]) return false;
   if(P.indexMap[i]!==P.selected){
-    // ★ 修正「顏色明明正確、填色卻像有延遲」的問題（本輪修復重點）：
-    //   舊規則把「第一次刷錯」只當提示、不落地，同格要等 700ms 冷卻後「再刷一次」才填得進去；
-    //   但拖曳時 lastPaint 會鎖住該格不再重複觸發，玩家必須放開再重新按下／等待，
-    //   看起來就是「選對顏色也要等一下才填得起來」的假性延遲。
-    //   新規則：刷錯色＝立即紅色閃燈提示（保持 700ms 防瘋狂閃爍），但不做任何懲罰、不鎖手勢；
-    //   只要編號與選取色相符，一律「立刻填色」，完全沒有冷卻或延遲。
     flashWrongColor(cell,i);
     return false;
   }
@@ -819,17 +854,9 @@ function doPaint(cell,i){
   return true;
 }
 
-/* ★ 最高難度（1x 完整＝數百萬格）「填色有延遲」的真正元凶：
-   舊寫法每次填色都呼叫 workCtx.putImageData()——在 1920×1920 的離屏畫布上，
-   Chromium/Safari 會把整張畫布標記為髒區，使得下一幀 render() 裡的 drawImage(workCanvas)
-   必須重傳／重建整張數百萬像素的紋理，單幀成本可達數十～數百毫秒；
-   再加上刷子拖曳時每一幀都觸發一次，視覺上就是嚴重的卡頓與「按了才慢慢填起來」的假性延遲。
-   新寫法：填色只更新 workImg（純記憶體，微秒級），並設定 pendingDirtyRects，
-   由 render() 每幀把「同一張 workImg」一次性 putImageData 回工作畫布（合併髒矩形、每幀最多一次），
-   徹底消除逐次 putImageData 造成的整幅紋理重傳。 */
-let pendingDirtyRects=null; // null = 尚無待同步；[] = 已排定但尚未累積任何矩形
+let pendingDirtyRects=null;
 function markWorkDirty(x,y,w,h){
-  if(!pendingDirtyRects) pendingDirtyRects=[]; // ★ 修正漏洞 1：初始化為空陣列，確保髒矩形能被記錄
+  if(!pendingDirtyRects) pendingDirtyRects=[];
   pendingDirtyRects.push(x,y,w,h);
 }
 function syncWorkCanvas(){
@@ -837,16 +864,14 @@ function syncWorkCanvas(){
   if(pendingDirtyRects.length){
     const R=pendingDirtyRects;
     for(let k=0;k<R.length;k+=4){
-      // ★ 修正漏洞 2：將 dx, dy 設為 0，讓 dirtyX, dirtyY 直接對應畫布上的 X, Y 座標
       P.workCtx.putImageData(P.workImg, 0, 0, R[k], R[k+1], R[k+2], R[k+3]);
     }
   }else{
-    P.workCtx.putImageData(P.workImg,0,0); // 安全兜底（重置等情境）
+    P.workCtx.putImageData(P.workImg,0,0);
   }
   pendingDirtyRects=null;
 }
 
-/* 單格塗抹：只上色的當前這一格，不做連通區塊搜尋 */
 function paintSingleCell(c,r){
   const {cols,indexMap,filled,palette,workImg}=P;
   const pi=indexMap[r*cols+c], e=palette[pi], d=workImg.data;
@@ -858,6 +883,7 @@ function paintSingleCell(c,r){
   dirty=true;
   updatePaletteItem(pi);
   updateProgress();
+  saveAutoState();
   if(P.filledCount===P.total) win();
 }
 
@@ -887,16 +913,13 @@ function floodFill(c0,r0,pi){
   }
   P.filledCount+=count;
   e.remaining-=count;
-  // ★ 修正漏洞：大區域油漆筒的邊界可能超出畫布（如 cols 為 2 的倍數時起點掃描會越到下一列），
-  //   舊寫法直接把未鉗制的 minX/minY/w/h 丟給 putImageData，座標為負時拋出
-  //   "Overload resolution failed"，整次填色中途崩掉——表現出來就是「油漆筒沒反應／要再按一次才有」。
-  //   同時改用每幀合併同步（見上方說明），不再逐次 putImageData 造成卡頓。
   const sx=clamp(minX,0,cols-1), sy=clamp(minY,0,rows-1);
   const sw=clamp(maxX,0,cols-1)-sx+1, sh=clamp(maxY,0,rows-1)-sy+1;
   markWorkDirty(sx,sy,sw,sh);
   dirty=true;
   updatePaletteItem(pi);
   updateProgress();
+  saveAutoState();
   if(P.filledCount===P.total) win();
 }
 
@@ -916,7 +939,6 @@ function setupEvents(){
   if(eventsBound) return; eventsBound=true;
   stage=$('canvas-container');
 
-  /* ---------- 雙指手勢：開始「移動畫面／縮放」（同時取消單指填色） ---------- */
   function beginTwoFinger(){
     painting=false; setPaintingUI(false); panning=false; panStart=null; disarmTool();
     const [a,b]=[...pointers.values()];
@@ -931,34 +953,18 @@ function setupEvents(){
     stage.setPointerCapture(e.pointerId);
     pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
     if(pointers.size===2){
-      // ★ 第二指落下：無論油漆筒是否開啟，立即改為「雙指＝移動／縮放」
       beginTwoFinger();
     }else if(pointers.size===1){
       if(e.button===2||e.button===1){ panning=true; panStart={x:e.clientX,y:e.clientY,tx:view.tx,ty:view.ty}; }
       else if(e.pointerType==='touch'){
-        // ★ 觸控單指：一律先進入填色模式（開關決定單格刷或油漆筒），拖曳不會誤移畫面；
-        //   若中途變成雙指，上面的 size===2 分支會立刻取消填色改走手勢。
-        //   ★ 開始塗畫即隱藏工具圖示（painting class），避免圖示擋住格線／編號
         painting=true; setPaintingUI(true); lastPaint=-1; setToolColor(); paintAt(e);
       }
       else{
         painting=true; setPaintingUI(true); lastPaint=-1; setToolColor(); moveToolCursor(e);
         const cell=cellFromEvent(e);
         if(bucketOn){
-          // 油漆筒開啟：按住即進入「填滿」狀態
           armTool(true); paintAt(e);
-          // ★ 修正「顏色正確卻要等一下才填得起來（假性延遲）」的最後元凶：
-          //   舊邏輯在按下錯色格時會設定 gestureLocked＋lastPaint 鎖住整個手勢，
-          //   玩家按住拖離錯色格後，途中經過的「正確顏色空格」全被鎖住不填，
-          //   必須放開再重新按下才填得進去——看起來就像填色有延遲。
-          //   新邏輯：按下錯色格只做「紅色閃燈提示」，完全不鎖手勢；
-          //   拖曳過程中遇到正確空格一律立即填色，零延遲、零懲罰。
         }else{
-          // 經典刷子（關閉）：按下的那一格交給 paintAt 即時處理——
-          //   編號相符→立刻填色；編號不符→只閃紅提示；已填格→靜默略過。
-          // ★ 若按下的位置不是「可立即填色的正確空格」（錯色／已填／畫布外／尚未選色），
-          //   視為平移起手式，讓使用者仍可拖曳移動畫面；但不鎖定刷子——
-          //   拖曳中一旦掃到正確顏色的空格，依然會即時填色（零延遲）。
           const bi=(cell? cell.r*P.cols+cell.c : -1);
           const paintedNow=(bi>=0 && P.selected>=0 && !P.filled[bi] && P.indexMap[bi]===P.selected);
           if(!paintedNow){
@@ -971,8 +977,6 @@ function setupEvents(){
   });
 
   stage.addEventListener('pointermove',e=>{
-    // 油漆筒「關閉」＝經典刷子：滑鼠懸停在畫布上掃過時，掃到哪一格就只填那一格（觸控不適用）
-    // ★ 已移除 gestureLocked：懸空掃過與拖曳都立即填色，零延遲、零懲罰。
     if(!painting&&!panning&&!pinch&&pointers.size===0){
       if(!bucketOn&&P&&P.selected>=0&&e.pointerType!=='touch'){ paintAt(e); }
       return;
@@ -980,7 +984,6 @@ function setupEvents(){
     if(!pointers.has(e.pointerId)) return;
     pointers.get(e.pointerId).x=e.clientX; pointers.get(e.pointerId).y=e.clientY;
     if(pinch&&pointers.size>=2){
-      // ★ 雙指：同時處理「縮放（捏合距離變化）」與「移動畫面（兩指中點位移）」
       const [a,b]=[...pointers.values()];
       const rect=stage.getBoundingClientRect();
       const d=Math.hypot(a.x-b.x,a.y-b.y)||1;
@@ -997,9 +1000,6 @@ function setupEvents(){
       applyView();
     }else if(painting&&pointers.size===1){
       moveToolCursor(e);
-      // ★ 已移除 gestureLocked 鎖定：拖曳途中掃到正確顏色的空格一律立即填色（零延遲）；
-      //   錯色格只會閃紅提示，不會擋住後續的正確填色。
-      // 刷子模式（油漆筒關閉）：拖動時每一格都算新目標，掃到哪一格填哪一格
       if(!bucketOn) lastPaint=-1;
       paintAt(e);
     }
@@ -1012,13 +1012,12 @@ function setupEvents(){
     if(pointers.size<2&&pinch){
       pinch=null;
       if(pointers.size===1){
-        // ★ 雙指抬起其中一指：不無腦續填，改為全部抬起等待，避免剩餘手指誤塗
         painting=false; setPaintingUI(false); panning=false; panStart=null; disarmTool();
       }
     }
     if(pointers.size===0){
       painting=false; setPaintingUI(false); panning=false; panStart=null;
-      disarmTool(); // 依開關狀態還原：油漆筒開啟時仍保持「沾色」外觀，關閉時回到經典刷子
+      disarmTool();
       if(wasPainting&&e.pointerType!=='mouse'){
         const now=Date.now();
         if(now-lastTap.t<320&&Math.hypot(e.clientX-lastTap.x,e.clientY-lastTap.y)<30) resetView();
@@ -1045,7 +1044,6 @@ function setupEvents(){
   window.addEventListener('resize',()=>{ if(P) resizeMainCanvas(); });
   window.addEventListener('orientationchange',()=>setTimeout(()=>{ if(P) resizeMainCanvas(); },300));
 
-  // 填滿畫面／全螢幕切換時，重新校正畫布尺寸與視角，避免黑屏或畫面偏移
   const onViewportChange=()=>{ if(P){ resizeMainCanvas(); applyView(); } };
   document.addEventListener('fullscreenchange',onViewportChange);
   document.addEventListener('webkitfullscreenchange',onViewportChange);
@@ -1053,7 +1051,6 @@ function setupEvents(){
     window.visualViewport.addEventListener('resize',onViewportChange);
     window.visualViewport.addEventListener('scroll',onViewportChange);
   }
-  // iOS Safari：旋轉鎖定／進入全螢幕時 resize 事件可能延遲觸發
   window.addEventListener('load',()=>{ if(P) resizeMainCanvas(); });
 }
 
@@ -1074,7 +1071,8 @@ function fmtTime(ms){
 }
 function startTimer(){
   stopTimer(); if(!P) return;
-  P.startTs=Date.now(); $('timer').textContent='0:00';
+  if(!P.startTs) P.startTs=Date.now();
+  $('timer').textContent=fmtTime(Date.now()-P.startTs);
   timerId=setInterval(()=>{ $('timer').textContent=fmtTime(Date.now()-P.startTs); },500);
 }
 function stopTimer(){
@@ -1082,7 +1080,6 @@ function stopTimer(){
   if(P&&P.startTs&&!P.elapsed) P.elapsed=Date.now()-P.startTs;
 }
 
-/* ---- double-confirm reset ---- */
 let resetArmed=false, resetArmTimer=null;
 function confirmReset(){
   if(!P) return;
@@ -1112,15 +1109,16 @@ function resetGrid(){
   P.workCtx.putImageData(P.workImg,0,0);
   P.palette.forEach((e,pi)=>{ e.remaining=e.total; e.el.style.display='flex'; e.fillEl.style.width='0%'; });
   P.savedThisRound=false;
-  // ★ 修正漏洞：重置後清空刷錯色防呆紀錄，否則同一格在冷卻期內重新玩會「看不到錯誤提示」
   lastFlash.clear(); flashes.items.length=0; flashes.length=0;
   if(P.selected>=0) select(P.selected,false);
   updateProgress(); dirty=true; startTimer();
+  lastSavedFilledStr = "";
+  saveAutoState();
   showToast('↺ 已重置畫布');
 }
 
 /* ================================================================
-   WIN / SAVE / GALLERY / VIEWER
+   WIN / SAVE / GALLERY / VIEWER / RESUME
    ================================================================ */
 function makeResultURL(maxDim,quality){
   const f=Math.min(maxDim/Math.max(P.cols,P.rows),80);
@@ -1134,6 +1132,7 @@ function makeResultURL(maxDim,quality){
 }
 function win(){
   stopTimer();
+  localStorage.removeItem('snapPaintAutoSave');
   setTimeout(()=>{
     $('complete-preview').src=makeResultURL(900,.85);
     $('complete-stats').innerHTML=
@@ -1169,7 +1168,6 @@ function saveArtwork(){
   else showToast('儲存空間不足，無法儲存');
 }
 
-/* ---- Gallery with individual delete ---- */
 function showGallery(){
   showScreen('screen-gallery');
   const grid=$('gallery-grid'); grid.innerHTML='';
@@ -1199,7 +1197,6 @@ function deleteGalleryItem(id){
   showToast('🗑️ 已刪除');
 }
 
-/* ---- full-screen artwork viewer ---- */
 let viewerItem=null;
 const V={s:1,tx:0,ty:0};
 function openViewer(item){
@@ -1283,6 +1280,139 @@ function deleteViewerItem(){
   hideOverlay('overlay-viewer');
 }
 
+/* ---------------- AUTO-SAVE RESUME ---------------- */
+function checkAutoSave() {
+  const str = localStorage.getItem('snapPaintAutoSave');
+  const resumeBtn = $('resume-btn');
+  if (resumeBtn) {
+    resumeBtn.style.display = str ? '' : 'none';
+  }
+}
+
+function resumeGame() {
+  const str = localStorage.getItem('snapPaintAutoSave');
+  if (!str) return;
+  try {
+    const data = JSON.parse(str);
+    if (data.v !== 2) {
+      localStorage.removeItem('snapPaintAutoSave');
+      checkAutoSave();
+      return;
+    }
+    const img = new Image();
+    img.onload = () => {
+      srcImg = img;
+      chosenPct = data.chosenPct;
+      
+      const cols = data.cols, rows = data.rows;
+      const n = cols * rows;
+      
+      const indexMap = decodeRLE_Uint16(data.indexMap, n);
+      const filled = decodeRLE_Uint8(data.filled, n);
+      
+      const palette = data.palette;
+      const keyToIdx = new Int16Array(4096).fill(-1);
+      palette.forEach((e, i) => {
+        keyToIdx[e.key] = i;
+        e.remaining = e.total;
+        e.el = null; e.fillEl = null;
+      });
+      
+      let filledCount = 0;
+      for (let i = 0; i < n; i++) {
+        if (filled[i]) {
+          filledCount++;
+          palette[indexMap[i]].remaining--;
+        }
+      }
+      
+      const workImg = new ImageData(cols, rows);
+      const wd = workImg.data;
+      const grayImg = new ImageData(cols, rows);
+      const gd = grayImg.data;
+      
+      for (let i = 0; i < n; i++) {
+        const pi = indexMap[i];
+        const e = palette[pi];
+        const o = i * 4;
+        gd[o] = e.gray; gd[o+1] = e.gray; gd[o+2] = e.gray; gd[o+3] = 255;
+        if (filled[i]) {
+          wd[o] = e.r; wd[o+1] = e.g; wd[o+2] = e.b; wd[o+3] = 255;
+        } else {
+          wd[o] = e.gray; wd[o+1] = e.gray; wd[o+2] = e.gray; wd[o+3] = 255;
+        }
+      }
+      
+      const workCanvas = document.createElement('canvas');
+      workCanvas.width = cols; workCanvas.height = rows;
+      const workCtx = workCanvas.getContext('2d');
+      workCtx.putImageData(workImg, 0, 0);
+      
+      P = {
+        cols, rows, total: n, indexMap, filled, palette, keyToIdx,
+        workImg, workCanvas, workCtx,
+        grayData: grayImg.data,
+        selected: -1, selectedEl: null, filledCount: filledCount,
+        savedThisRound: false, startTs: Date.now() - (data.elapsed * 1000), elapsed: 0
+      };
+      
+      flashes.items.length = 0; flashes.length = 0; lastFlash.clear();
+      pendingDirtyRects = null; numbersIncomplete = false;
+      
+      baseSaveJSON = JSON.stringify({
+        v: 2,
+        imgSrc: data.imgSrc,
+        cols: P.cols,
+        rows: P.rows,
+        indexMap: data.indexMap,
+        filled: "{FILLED_PLACEHOLDER}",
+        palette: data.palette,
+        elapsed: "{ELAPSED_PLACEHOLDER}",
+        chosenPct: data.chosenPct
+      });
+      lastSavedFilledStr = data.filled;
+      
+      renderPalette();
+      updateProgress();
+      $('num-input').value = '';
+      
+      showScreen('screen-game');
+      const initCanvasWhenReady=(tries=0)=>{
+        const el=$('canvas-container');
+        if(el && el.clientWidth>0 && el.clientHeight>0){
+          resizeMainCanvas(); resetView(); startTimer();
+          if (P.filledCount === P.total) win();
+        }else if(tries<120){
+          requestAnimationFrame(()=>initCanvasWhenReady(tries+1));
+        }else{
+          resizeMainCanvas(); resetView(); startTimer();
+        }
+      };
+      requestAnimationFrame(()=>initCanvasWhenReady());
+      
+      for(let i=0; i<P.palette.length; i++){
+        if(P.palette[i].remaining > 0){
+          select(i, true);
+          break;
+        }
+      }
+      
+      showToast('已恢復上次進度 🔍');
+    };
+    img.onerror = () => {
+      localStorage.removeItem('snapPaintAutoSave');
+      checkAutoSave();
+      showToast('存檔圖片載入失敗');
+    };
+    img.src = data.imgSrc;
+  } catch (e) {
+    console.error("Resume failed", e);
+    localStorage.removeItem('snapPaintAutoSave');
+    checkAutoSave();
+    showToast('存檔損壞，已清除');
+  }
+}
+
 /* ---------------- boot ---------------- */
 function goHome(){
   hideOverlay('overlay-complete');
@@ -1291,8 +1421,10 @@ function goHome(){
   if(P) P.elapsed=0;
   resetView();
   showScreen('screen-menu');
+  checkAutoSave();
 }
 setupEvents();
+checkAutoSave();
 </script>
 </body>
 </html>
